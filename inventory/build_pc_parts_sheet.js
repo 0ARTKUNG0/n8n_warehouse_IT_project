@@ -36,7 +36,9 @@ const FILES = {
 const rows = [];
 const seen = new Set();
 for (const [file, [category, prefix, describe, extraTags]] of Object.entries(FILES)) {
-  const sheet = XLSX.readFile(path.join(dir, file), { raw: true }).Sheets.Sheet1;
+  // read the file as UTF-8 text: readFile guesses the wrong encoding and garbles "™", "–" and "ü"
+  const text = fs.readFileSync(path.join(dir, file), 'utf8').replace(/^\uFEFF/, '');
+  const sheet = XLSX.read(text, { type: 'string', raw: true }).Sheets.Sheet1;
   let n = 0;
   for (const r of XLSX.utils.sheet_to_json(sheet, { defval: '' })) {
     const usd = Number(s(r.Price).replace(/[^0-9.]/g, ''));

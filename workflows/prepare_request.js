@@ -91,7 +91,7 @@ const lines = picks.map(p => [
   txt(p.description).slice(0, 250),
 ].join(' | '));
 const products_text = products.length
-  ? `(The store has ${products.length} products; these ${lines.length} match this question best. If what the customer wants isn't listed, ask for the exact model or type instead of saying the store doesn't have it.)\n${lines.join('\n')}`
+  ? `(The store has ${products.length} products; these ${lines.length} match the latest message best. Products talked about earlier in this chat may not be listed here: that does not mean they are sold out or missing. If what the customer wants isn't listed, ask for the exact model or type instead of saying the store doesn't have it.)\n${lines.join('\n')}`
   : 'The product list is not available right now. Do not name any products.';
 
 // mode "order" (sent by a front-store app) always goes to the Order Desk

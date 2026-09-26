@@ -124,7 +124,7 @@ const lines = picks.map(p => [
   txt(p.description).slice(0, 250),
 ].join(' | '));
 const products_text = products.length
-  ? \`(The store has \${products.length} products; these \${lines.length} match this question best. If what the customer wants isn't listed, ask for the exact model or type instead of saying the store doesn't have it.)\\n\${lines.join('\\n')}\`
+  ? \`(The store has \${products.length} products; these \${lines.length} match the latest message best. Products talked about earlier in this chat may not be listed here: that does not mean they are sold out or missing. If what the customer wants isn't listed, ask for the exact model or type instead of saying the store doesn't have it.)\\n\${lines.join('\\n')}\`
   : 'The product list is not available right now. Do not name any products.';
 
 // mode "order" (sent by a front-store app) always goes to the Order Desk
@@ -192,6 +192,7 @@ const order_Desk = node({
 6. Only when they have confirmed AND given the location, end your reply with this exact line, using the final SKUs and quantities:
 ORDER_JSON: {"location": "branch or address", "items": [{"sku": "SKU", "qty": 1}]}
 Never write ORDER_JSON before they confirm, and never write it twice for the same order. If they change the order, show the new summary and ask again.
+PRODUCTS only lists the products that match their latest message, so after a reply like "yes" or a branch name it shows other products. The parts in your last summary are still valid even when they are not in PRODUCTS: never call them missing or sold out for that reason, and use their SKUs exactly as you wrote them. The system re-checks stock against the live sheet before it places the order.
 
 PRODUCTS (sku | name | category | price | stock | tags | description):
 {{ $('Prepare Request').first(0).json.products_text }}`),
@@ -218,22 +219,26 @@ const check_Order = node({
       jsCode: `// The Order Desk writes ORDER_JSON only after the front store confirmed and gave its location.
 // Check that order against the sheet as it is right now; only then is stock taken off.
 const out = String($json.output ?? '');
-const found = out.match(/ORDER_JSON:\\s*(\\{[\\s\\S]*\\})\\s*$/);
-const reply = out.replace(/ORDER_JSON:[\\s\\S]*$/, '').trim();
+const at = out.search(/ORDER_JSON/i);
+// the text before ORDER_JSON, without a dangling \`\`\` or ** the AI may have put around it
+const reply = (at < 0 ? out : out.slice(0, at)).replace(/(^|\\n)\\s*(\`\`\`[a-z]*|\\*\\*|\`)\\s*$/i, '').trim();
 const answer = text => [{ json: { place: false, agent: 'Order Desk', output: text } }];
-if (!found) return answer(out);
+if (at < 0) return answer(out);
 
 let order;
-try { order = JSON.parse(found[1]); } catch (e) {
+const rest = out.slice(at);
+try { order = JSON.parse(rest.slice(rest.indexOf('{'), rest.lastIndexOf('}') + 1)); } catch (e) {
   return answer(\`\${reply}\\n\\nระบบอ่านรายการสั่งซื้อไม่ได้ กรุณายืนยันอีกครั้ง / Couldn't read the order, please confirm again.\`);
 }
 const txt = v => String(v ?? '').trim();
 const num = v => (typeof v === 'number' ? v : txt(v) === '' ? NaN : Number(txt(v).replace(/[^0-9.-]/g, '')));
-const sheet = new Map($('Get Products').all(0).map(i => i.json).filter(p => txt(p.sku)).map(p => [txt(p.sku).toUpperCase(), p]));
+// the AI sometimes writes "SIBU‑084" with a special dash or space: compare SKUs in a plain form
+const key = v => txt(v).normalize('NFKC').replace(/[\\u2010-\\u2015\\u2212\\uFE58\\uFE63\\uFF0D]/g, '-').replace(/[\\u200B-\\u200D\\u2060\\uFEFF]/g, '').replace(/\\s+/g, ' ').toUpperCase();
+const sheet = new Map($('Get Products').all(0).map(i => i.json).filter(p => txt(p.sku)).map(p => [key(p.sku), p]));
 const location = txt(order.location);
 const wanted = new Map();
 for (const i of Array.isArray(order.items) ? order.items : []) {
-  const sku = txt(i.sku).toUpperCase();
+  const sku = key(i.sku);
   wanted.set(sku, (wanted.get(sku) ?? 0) + Math.floor(num(i.qty)));
 }
 

@@ -17,7 +17,7 @@ The store website has a chat. Customers ask about products, prices and problems.
 
 ## The workflow: "IT Warehouse - Store Chat" (one n8n workflow)
 Trigger: **Webhook** `POST /webhook/store-assistant`, body `{ "session_id": "...", "message": "..." }` (a sold-out product page can send `product_sku` without a message).
-Reply: `{ "ok": true, "agent": "Hardware Expert | Calculator | Troubleshooter", "reply": "..." }`.
+Reply: `{ "ok": true, "agent": "Order Desk | Hardware Expert | Calculator | Troubleshooter", "reply": "..." }`.
 
 Steps, in order:
 1. **Webhook**: receives the customer's message.
@@ -51,7 +51,8 @@ AI sub-nodes shared by all four agents:
 - A customer asks for a sold-out mouse: the Router picks Hardware Expert, which says it is sold out and asks what it will be used for (1.5 s).
 - A price question "2 × MS-002 and 1 × KB-002 incl. VAT": the Router picks Calculator, which uses the Calculator tool: ฿4,670.00 + VAT ฿326.90 = ฿4,996.90 (3 s).
 - Backup test: with Groq deliberately broken, the Router switched to Gemini and still answered. When Gemini was also overloaded (Google returned 503), the customer got the polite "please try again" message instead of an error.
-(These tests ran while products came from an n8n table. The product list now comes from the Google Sheet; the AI part is unchanged.)
+(These three ran while products came from an n8n table; the AI part is unchanged.)
+- Front-store order, with the Google Sheet (2,964 products): "Ryzen 5 5600X, DDR4 16GB RAM, RTX 4070, 1 each". The Order Desk matched all three parts, checked stock and that they fit together (AM4, DDR4, 200 W card) and showed the total, ฿29,173.55 incl. VAT (6 s). After "confirm, send to Bang Na branch", Check Order placed order ORD-MUIYOFU5 and Update Stock lowered each part's stock_qty by 1 in the sheet (4 s).
 
 ## Tools used
 n8n (self-hosted, reached through ngrok), Groq API (free tier), Google Gemini API (free tier), Google Sheets, Gmail.
