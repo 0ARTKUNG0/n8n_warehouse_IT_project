@@ -1,0 +1,399 @@
+{
+  "id": "inventory-sync-simple",
+  "name": "IT Warehouse - Inventory Sync",
+  "nodes": [
+    {
+      "id": "526caba5-6dd4-4d17-a685-8cb9bb029614",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fb9e492d-9091-472f-b892-afa322221e5c",
+      "name": "Find inventory.xlsx",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "searchMethod": "query",
+        "queryString": "name = 'inventory.xlsx' and trashed = false",
+        "returnAll": false,
+        "limit": 1,
+        "filter": {
+          "whatToSearch": "files"
+        },
+        "options": {
+          "fields": [
+            "id",
+            "name"
+          ]
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "w5G4HPgVcRe5OMeK",
+          "name": "Google Drive account"
+        }
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "db642602-d30c-45dd-90e6-b798146a333b",
+      "name": "Sync Now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        400
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "880f4883-980b-46e2-85c6-b78b5d5fe2de",
+      "name": "Download File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.id }}"
+        },
+        "options": {
+          "binaryPropertyName": "data"
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "w5G4HPgVcRe5OMeK",
+          "name": "Google Drive account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "ae6bac1f-5012-46c9-9414-741e4db327fa",
+      "name": "Read Excel Rows",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        300
+      ],
+      "parameters": {
+        "operation": "xlsx",
+        "binaryPropertyName": "data",
+        "options": {
+          "sheetName": "Inventory",
+          "headerRow": true,
+          "includeEmptyCells": true
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "5b4a3b81-d1f5-4bc1-9775-46a656452ae2",
+      "name": "Clean Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Keep only rows that are complete and correct. A row with a mistake is skipped,\n// so that product keeps its last good values in the store.\nconst txt = v => String(v ?? '').trim();\nconst num = v => (typeof v === 'number' ? v : txt(v) === '' ? NaN : Number(txt(v).replace(/บาท|thb|฿|,|\\s/gi, '')));\nconst seen = new Set();\nconst rows = [];\nfor (const { json: r } of $input.all()) {\n  const p = {\n    sku: txt(r.sku).toUpperCase(),\n    name: txt(r.name),\n    category: txt(r.category).toLowerCase(),\n    price_ex_vat: Math.round(num(r.price_ex_vat) * 100) / 100,\n    stock_qty: num(r.stock_qty),\n    image_url: txt(r.image_url),\n    description: txt(r.description).slice(0, 1000),\n    tags: txt(r.tags).toLowerCase(),\n  };\n  const ok = p.sku && p.name && !seen.has(p.sku)\n    && Number.isFinite(p.price_ex_vat) && p.price_ex_vat >= 0\n    && Number.isInteger(p.stock_qty) && p.stock_qty >= 0;\n  if (!ok) continue;\n  seen.add(p.sku);\n  rows.push({ json: p });\n}\n// an empty or wrong file must not look like a successful sync\nif (!rows.length) throw new Error('No valid product rows in the Inventory sheet');\nreturn rows;\n"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "9c016a3d-553d-437a-a2f6-80c60999c401",
+      "name": "Save Products",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "xgTZJDsEG067UvCX",
+          "cachedResultName": "inventory"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "sku",
+              "condition": "eq",
+              "keyValue": "={{ $json.sku }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "category",
+              "displayName": "category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "price_ex_vat",
+              "displayName": "price_ex_vat",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "stock_qty",
+              "displayName": "stock_qty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "image_url",
+              "displayName": "image_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "description",
+              "displayName": "description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tags",
+              "displayName": "tags",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "b5c17a93-618d-4e53-a94f-58cc9b887060",
+      "name": "When This Workflow Fails",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        620
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a127676e-61b6-43ce-867d-f35195ea2600",
+      "name": "Email Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        620
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "<__PLACEHOLDER_VALUE__Email address that should receive alerts__>",
+        "subject": "={{ '[Store alert] ' + $json.workflow.name }}",
+        "emailType": "text",
+        "message": "={{ $json.execution.error.message }}\nStep: {{ $json.execution.lastNodeExecuted }}\nOpen: {{ $json.execution.url }}\n\nThe chat keeps using the last good product list.",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "oDZaXI1qofa3HUa3",
+          "name": "Gmail account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "9019c25f-ae21-447f-a9fa-d6e492b3b055",
+      "name": "Sticky Note 9019c25f",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        112
+      ],
+      "parameters": {
+        "content": "## IT Warehouse - Inventory Sync\n\nEvery 5 minutes: **inventory.xlsx** on Google Drive (sheet **Inventory**) → the **inventory** data table the Store Chat answers from.\n\n- A row with a mistake (no sku or name, bad price or stock) is skipped; that product keeps its last good values.\n- Every step has **Retry On Fail**. If it still fails, **Email Alert** tells you and the chat keeps the last good list.\n- To take a product off sale, set its stock_qty to 0.\n\n**Edit me:** your email in **Email Alert**.",
+        "color": 5,
+        "width": 160,
+        "height": 432
+      }
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Find inventory.xlsx",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find inventory.xlsx": {
+      "main": [
+        [
+          {
+            "node": "Download File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sync Now": {
+      "main": [
+        [
+          {
+            "node": "Find inventory.xlsx",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download File": {
+      "main": [
+        [
+          {
+            "node": "Read Excel Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Excel Rows": {
+      "main": [
+        [
+          {
+            "node": "Clean Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean Rows": {
+      "main": [
+        [
+          {
+            "node": "Save Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When This Workflow Fails": {
+      "main": [
+        [
+          {
+            "node": "Email Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 240,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none"
+  }
+}

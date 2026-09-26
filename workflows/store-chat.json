@@ -1,0 +1,640 @@
+{
+  "id": "store-chat",
+  "name": "IT Warehouse - Store Chat",
+  "nodes": [
+    {
+      "id": "8413cf0c-4b94-4a2a-8a0a-62e62f1ef3f8",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "store-assistant",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "935dfa6a-0da0-4f33-a0d3-146f0ab85dfd"
+    },
+    {
+      "id": "dfc259fd-bc67-48b2-9a6a-3ea27aea5a4d",
+      "name": "Store Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": true,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "store-name",
+              "name": "store_name",
+              "value": "IT Warehouse",
+              "type": "string"
+            },
+            {
+              "id": "contact",
+              "name": "contact",
+              "value": "หน้า \"ติดต่อเรา\" บนเว็บไซต์",
+              "type": "string"
+            },
+            {
+              "id": "hours",
+              "name": "hours",
+              "value": "ดูเวลาทำการได้ที่หน้าเว็บไซต์",
+              "type": "string"
+            },
+            {
+              "id": "policies",
+              "name": "policies",
+              "value": "เรื่องการรับประกัน การเปลี่ยนหรือคืนสินค้า ให้ติดต่อพนักงาน",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "3be3cf0f-6079-46c5-a078-5d0bd4f459e6",
+      "name": "Get Products",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "xgTZJDsEG067UvCX",
+          "cachedResultName": "inventory"
+        },
+        "returnAll": true
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "8ada686e-1e5a-4cf5-a89e-0be49e729dcf",
+      "name": "Prepare Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Read the website's request and turn the product list into text for the AI.\nconst body = $('Webhook').first(0).json.body ?? {};\nconst txt = v => String(v ?? '').trim();\nconst session_id = txt(body.session_id) || 'guest';\nconst sku = txt(body.product_sku).toUpperCase();\n// opened from a sold-out product page with no message yet\nconst message = txt(body.message).slice(0, 1000) || (sku ? `สินค้า ${sku} หมด ช่วยแนะนำตัวอื่นให้หน่อย` : 'สวัสดี');\n\nconst money = n => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\nconst products = $input.all().map(i => i.json).filter(p => p.sku);\nconst products_text = products.map(p => [\n  p.sku, p.name, p.category,\n  `฿${money(p.price_ex_vat)} before VAT, ฿${money(p.price_ex_vat * 1.07)} incl. VAT`,\n  p.stock_qty > 0 ? `in stock: ${p.stock_qty}` : 'SOLD OUT',\n  `tags: ${txt(p.tags)}`,\n  txt(p.description).slice(0, 250),\n].join(' | ')).join('\\n') || 'The product list is not available right now. Do not name any products.';\n\nreturn [{ json: { session_id, message, products_text } }];\n"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "fa1397ba-cebc-4ec5-836e-7db6fdb8f49f",
+      "name": "Router",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "Classify the customer's message for a computer-hardware store. Answer with exactly one word:\nhardware = questions about products, recommendations, specs, stock, sold-out products, or the customer telling what they will use a product for\ncalculator = prices for quantities, totals, VAT, quotations\ntroubleshooter = problems, setup, drivers, warranty, returns, orders, delivery\nIf unsure, answer hardware.",
+          "maxIterations": 3,
+          "enableStreaming": false
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "024ae642-aad8-4e09-a861-a6500da8e4ae",
+      "name": "Groq (main model)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        900,
+        560
+      ],
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {
+          "temperature": 0.3,
+          "maxTokensToSample": 2048
+        }
+      },
+      "credentials": {
+        "groqApi": {
+          "id": "fk0N9mxbYr8EqEaP",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "id": "115d4c56-6b04-4e20-9858-ae4c5c87ab69",
+      "name": "Gemini (backup model)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        1060,
+        560
+      ],
+      "parameters": {
+        "modelName": "models/gemini-flash-latest",
+        "options": {
+          "temperature": 0.3,
+          "maxOutputTokens": 2048
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "iEXJevGkgXLcbG0R",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "id": "750bf4aa-66b9-46b6-b920-8ea540edc2f0",
+      "name": "Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1140,
+        300
+      ],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "outputKey": "calculator",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.output }}",
+                    "rightValue": "calculator",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "troubleshooter",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.output }}",
+                    "rightValue": "troubleshoot",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "hardware"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "de6aa7fc-4a51-4137-9962-8aed366793b1",
+      "name": "Calculator",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1500,
+        120
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Prepare Request').first(0).json.message }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "=You are the Calculator of {{ $('Store Info').first(0).json.store_name }}, a computer-hardware store in Thailand. Reply in the customer's language (Thai or English), short and clear.\nWork out prices, totals and VAT for the products and quantities the customer asks about. Use the Calculator Tool for every sum; never calculate in your head. Use the price before VAT from PRODUCTS, then add VAT 7%.\nShow each line (name x qty = amount), the subtotal before VAT, VAT 7% and the total, in baht with 2 decimals.\nSay if a product is SOLD OUT or has less stock than asked. Only use products from PRODUCTS; if a product isn't there, say you can't find it.\n\nPRODUCTS (sku | name | category | price | stock | tags | description):\n{{ $('Prepare Request').first(0).json.products_text }}",
+          "maxIterations": 8,
+          "enableStreaming": false
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "795439ec-0f07-4a8e-b218-cf7e43a0757e",
+      "name": "Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        1500,
+        700
+      ],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Prepare Request').first(0).json.session_id }}",
+        "contextWindowLength": 8
+      }
+    },
+    {
+      "id": "88eab797-f7ec-40b1-b0b7-c44b168fe455",
+      "name": "Calculator Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolCalculator",
+      "typeVersion": 1,
+      "position": [
+        1660,
+        700
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "f3826f30-df02-479e-afee-e97368704f1d",
+      "name": "Troubleshooter",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1500,
+        300
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Prepare Request').first(0).json.message }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "=You are the Troubleshooter of {{ $('Store Info').first(0).json.store_name }}, a computer-hardware store in Thailand. Reply in the customer's language (Thai or English), short and friendly.\nHelp with product problems, setup, drivers, warranty, returns, orders and delivery. Give short numbered steps. Base product-specific steps on that product's description in PRODUCTS; don't guess from other brands.\nFor warranty, returns, opening hours and contact, use only STORE INFO. If the steps don't fix it, or it needs a repair, return or order check, ask the customer to contact the staff: {{ $('Store Info').first(0).json.contact }}.\n\nSTORE INFO:\nHours: {{ $('Store Info').first(0).json.hours }}\nPolicies: {{ $('Store Info').first(0).json.policies }}\nContact: {{ $('Store Info').first(0).json.contact }}\n\nPRODUCTS (sku | name | category | price | stock | tags | description):\n{{ $('Prepare Request').first(0).json.products_text }}",
+          "maxIterations": 3,
+          "enableStreaming": false
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "b911b022-d862-4548-91a9-3c38bd4e10a4",
+      "name": "Hardware Expert",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1500,
+        480
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Prepare Request').first(0).json.message }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "=You are the Hardware Expert of {{ $('Store Info').first(0).json.store_name }}, a computer-hardware store in Thailand. Reply in the customer's language (Thai or English), short and friendly.\nRecommend products that fit what the customer will use them for (competitive gaming, casual gaming, office or study, design). Give the price incl. VAT and say if it is in stock. Only use products from PRODUCTS; never invent products, specs or prices.\nSOLD-OUT RULE: if the product the customer wants is SOLD OUT, say so and first ask what they will use it for (for example FPS/MOBA gaming, office work, design). Do not recommend anything yet. When they answer, recommend 1-3 IN-STOCK products that fit that use, each with one short trade-off compared with the product they wanted.\n\nPRODUCTS (sku | name | category | price | stock | tags | description):\n{{ $('Prepare Request').first(0).json.products_text }}",
+          "maxIterations": 3,
+          "enableStreaming": false
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "b13cb702-f9a2-4e07-9c4c-31c1a93fe79f",
+      "name": "Reply to Website",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1880,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, agent: $prevNode.name, reply: $json.output || 'ขออภัยครับ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง / Sorry, something went wrong. Please try again.' }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "229a0278-f933-4e03-b067-1b68e6651169",
+      "name": "When This Workflow Fails",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        820
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "dcf85d1b-1638-4724-a03c-fa984b94895b",
+      "name": "Email Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        820
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "<__PLACEHOLDER_VALUE__Email address that should receive alerts__>",
+        "subject": "={{ '[Store alert] ' + $json.workflow.name }}",
+        "emailType": "text",
+        "message": "={{ $json.execution.error.message }}\nStep: {{ $json.execution.lastNodeExecuted }}\nOpen: {{ $json.execution.url }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "oDZaXI1qofa3HUa3",
+          "name": "Gmail account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "80fb56e0-7f13-4cd7-9c1e-32a4937901f3",
+      "name": "Sticky Note 80fb56e0",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        208
+      ],
+      "parameters": {
+        "content": "## IT Warehouse - Store Chat\n\nThe website sends **POST /webhook/store-assistant** with `{ \"session_id\": \"...\", \"message\": \"...\" }` (for a sold-out product page: `product_sku` and no message).\nIt answers `{ \"ok\": true, \"agent\": \"...\", \"reply\": \"...\" }`.\n\n- **Router** picks Hardware Expert, Calculator or Troubleshooter.\n- Every AI Agent uses **Groq** first and switches to **Gemini** if Groq fails.\n- Every step has **Retry On Fail** (3 tries). If an agent still fails, the customer gets a polite \"please try again\".\n- If the workflow crashes, **Email Alert** tells you.\n\n**Edit me:** your details in **Store Info**, your email in **Email Alert**.",
+        "color": 5,
+        "width": 384,
+        "height": 224
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Store Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Info": {
+      "main": [
+        [
+          {
+            "node": "Get Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Products": {
+      "main": [
+        [
+          {
+            "node": "Prepare Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Request": {
+      "main": [
+        [
+          {
+            "node": "Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq (main model)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Router",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Calculator",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Troubleshooter",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Hardware Expert",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini (backup model)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Router",
+            "type": "ai_languageModel",
+            "index": 1
+          },
+          {
+            "node": "Calculator",
+            "type": "ai_languageModel",
+            "index": 1
+          },
+          {
+            "node": "Troubleshooter",
+            "type": "ai_languageModel",
+            "index": 1
+          },
+          {
+            "node": "Hardware Expert",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Calculator",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Troubleshooter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Hardware Expert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculator": {
+      "main": [
+        [
+          {
+            "node": "Reply to Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Calculator",
+            "type": "ai_memory",
+            "index": 0
+          },
+          {
+            "node": "Troubleshooter",
+            "type": "ai_memory",
+            "index": 0
+          },
+          {
+            "node": "Hardware Expert",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculator Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Calculator",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Troubleshooter": {
+      "main": [
+        [
+          {
+            "node": "Reply to Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hardware Expert": {
+      "main": [
+        [
+          {
+            "node": "Reply to Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When This Workflow Fails": {
+      "main": [
+        [
+          {
+            "node": "Email Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 120,
+    "saveDataErrorExecution": "all"
+  }
+}
