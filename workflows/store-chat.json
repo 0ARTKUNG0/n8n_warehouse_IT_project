@@ -3,7 +3,7 @@
   "name": "IT Warehouse - Store Chat",
   "nodes": [
     {
-      "id": "8413cf0c-4b94-4a2a-8a0a-62e62f1ef3f8",
+      "id": "a6d88ac6-8bb1-476a-9469-21244d02576b",
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
@@ -17,10 +17,10 @@
         "responseMode": "responseNode",
         "options": {}
       },
-      "webhookId": "935dfa6a-0da0-4f33-a0d3-146f0ab85dfd"
+      "webhookId": "e21cab58-40ac-4351-a834-fa3095904de2"
     },
     {
-      "id": "dfc259fd-bc67-48b2-9a6a-3ea27aea5a4d",
+      "id": "63cc1757-a3f1-4ef1-a1df-edfa873c63ce",
       "name": "Store Info",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
@@ -65,24 +65,36 @@
       "waitBetweenTries": 2000
     },
     {
-      "id": "3be3cf0f-6079-46c5-a078-5d0bd4f459e6",
+      "id": "8a22b86b-154f-4cdb-bce5-3f872946567d",
       "name": "Get Products",
-      "type": "n8n-nodes-base.dataTable",
-      "typeVersion": 1.1,
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
       "position": [
         440,
         300
       ],
       "parameters": {
-        "resource": "row",
-        "operation": "get",
-        "dataTableId": {
+        "resource": "sheet",
+        "operation": "read",
+        "authentication": "oAuth2",
+        "documentId": {
           "__rl": true,
           "mode": "list",
-          "value": "xgTZJDsEG067UvCX",
+          "value": "",
           "cachedResultName": "inventory"
         },
-        "returnAll": true
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Inventory"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aiEpt4MCfgtCCgZ1",
+          "name": "Google Sheets account"
+        }
       },
       "executeOnce": true,
       "retryOnFail": true,
@@ -92,7 +104,7 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "8ada686e-1e5a-4cf5-a89e-0be49e729dcf",
+      "id": "8ab82e5a-bdec-4a1a-98e1-9b4dc378a7a8",
       "name": "Prepare Request",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -102,14 +114,14 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Read the website's request and turn the product list into text for the AI.\nconst body = $('Webhook').first(0).json.body ?? {};\nconst txt = v => String(v ?? '').trim();\nconst session_id = txt(body.session_id) || 'guest';\nconst sku = txt(body.product_sku).toUpperCase();\n// opened from a sold-out product page with no message yet\nconst message = txt(body.message).slice(0, 1000) || (sku ? `สินค้า ${sku} หมด ช่วยแนะนำตัวอื่นให้หน่อย` : 'สวัสดี');\n\nconst money = n => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\nconst products = $input.all().map(i => i.json).filter(p => p.sku);\nconst products_text = products.map(p => [\n  p.sku, p.name, p.category,\n  `฿${money(p.price_ex_vat)} before VAT, ฿${money(p.price_ex_vat * 1.07)} incl. VAT`,\n  p.stock_qty > 0 ? `in stock: ${p.stock_qty}` : 'SOLD OUT',\n  `tags: ${txt(p.tags)}`,\n  txt(p.description).slice(0, 250),\n].join(' | ')).join('\\n') || 'The product list is not available right now. Do not name any products.';\n\nreturn [{ json: { session_id, message, products_text } }];\n"
+        "jsCode": "// Read the website's request and turn the product list (from the Google Sheet) into text for the AI.\nconst body = $('Webhook').first(0).json.body ?? {};\nconst txt = v => String(v ?? '').trim();\nconst num = v => (typeof v === 'number' ? v : txt(v) === '' ? NaN : Number(txt(v).replace(/[^0-9.-]/g, '')));\nconst session_id = txt(body.session_id) || 'guest';\nconst sku = txt(body.product_sku).toUpperCase();\n// opened from a sold-out product page with no message yet\nconst message = txt(body.message).slice(0, 1000) || (sku ? `สินค้า ${sku} หมด ช่วยแนะนำตัวอื่นให้หน่อย` : 'สวัสดี');\n\nconst money = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\n// rows with a missing sku, name or price are skipped\nconst products = $input.all().map(i => i.json)\n  .filter(p => txt(p.sku) && txt(p.name) && Number.isFinite(num(p.price_ex_vat)));\nconst products_text = products.map(p => [\n  txt(p.sku).toUpperCase(), txt(p.name), txt(p.category),\n  `฿${money(num(p.price_ex_vat))} before VAT, ฿${money(num(p.price_ex_vat) * 1.07)} incl. VAT`,\n  num(p.stock_qty) > 0 ? `in stock: ${num(p.stock_qty)}` : 'SOLD OUT',\n  `tags: ${txt(p.tags)}`,\n  txt(p.description).slice(0, 250),\n].join(' | ')).join('\\n') || 'The product list is not available right now. Do not name any products.';\n\nreturn [{ json: { session_id, message, products_text } }];\n"
       },
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 2000
     },
     {
-      "id": "fa1397ba-cebc-4ec5-836e-7db6fdb8f49f",
+      "id": "e6373cee-b4e1-41c6-9f19-fc3701ff33ea",
       "name": "Router",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
@@ -133,7 +145,7 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "024ae642-aad8-4e09-a861-a6500da8e4ae",
+      "id": "6945ec9f-a1a4-4ee3-858d-8594495d7df6",
       "name": "Groq (main model)",
       "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
       "typeVersion": 1,
@@ -156,7 +168,7 @@
       }
     },
     {
-      "id": "115d4c56-6b04-4e20-9858-ae4c5c87ab69",
+      "id": "2793fe44-d18c-4dc8-9a36-52132c2b52b6",
       "name": "Gemini (backup model)",
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1.1,
@@ -179,7 +191,7 @@
       }
     },
     {
-      "id": "750bf4aa-66b9-46b6-b920-8ea540edc2f0",
+      "id": "bdc28053-b4df-40b3-bdce-27b6ef9acf00",
       "name": "Route",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.4,
@@ -247,7 +259,7 @@
       "waitBetweenTries": 2000
     },
     {
-      "id": "de6aa7fc-4a51-4137-9962-8aed366793b1",
+      "id": "96f345e6-db6b-47fd-9bcd-bf6eb8daf89c",
       "name": "Calculator",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
@@ -271,7 +283,7 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "795439ec-0f07-4a8e-b218-cf7e43a0757e",
+      "id": "dbaa3520-85a7-412b-a539-85ee08c2673b",
       "name": "Chat Memory",
       "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
       "typeVersion": 1.4,
@@ -286,7 +298,7 @@
       }
     },
     {
-      "id": "88eab797-f7ec-40b1-b0b7-c44b168fe455",
+      "id": "c9b1eb85-61ef-4332-987c-2f27a0907883",
       "name": "Calculator Tool",
       "type": "@n8n/n8n-nodes-langchain.toolCalculator",
       "typeVersion": 1,
@@ -297,7 +309,7 @@
       "parameters": {}
     },
     {
-      "id": "f3826f30-df02-479e-afee-e97368704f1d",
+      "id": "c54ca5ff-ae0e-4b65-8c87-630b27817291",
       "name": "Troubleshooter",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
@@ -321,7 +333,7 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "b911b022-d862-4548-91a9-3c38bd4e10a4",
+      "id": "7a7b7b2e-92eb-45c9-ad50-7e154bbe1534",
       "name": "Hardware Expert",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
@@ -345,7 +357,7 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "b13cb702-f9a2-4e07-9c4c-31c1a93fe79f",
+      "id": "2feec9ef-717e-48aa-9da2-b7bec0842af4",
       "name": "Reply to Website",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
@@ -365,7 +377,7 @@
       "waitBetweenTries": 1000
     },
     {
-      "id": "229a0278-f933-4e03-b067-1b68e6651169",
+      "id": "6a52ee59-f326-4d78-aaaf-5dee992dccd9",
       "name": "When This Workflow Fails",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
@@ -376,7 +388,7 @@
       "parameters": {}
     },
     {
-      "id": "dcf85d1b-1638-4724-a03c-fa984b94895b",
+      "id": "6c672cb9-0100-4bb0-b9f7-2634ea62b33a",
       "name": "Email Alert",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.2,
@@ -406,8 +418,8 @@
       "waitBetweenTries": 5000
     },
     {
-      "id": "80fb56e0-7f13-4cd7-9c1e-32a4937901f3",
-      "name": "Sticky Note 80fb56e0",
+      "id": "0edd26e7-cbd9-4750-83d1-1adff9550890",
+      "name": "Sticky Note 0edd26e7",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
@@ -415,7 +427,7 @@
         208
       ],
       "parameters": {
-        "content": "## IT Warehouse - Store Chat\n\nThe website sends **POST /webhook/store-assistant** with `{ \"session_id\": \"...\", \"message\": \"...\" }` (for a sold-out product page: `product_sku` and no message).\nIt answers `{ \"ok\": true, \"agent\": \"...\", \"reply\": \"...\" }`.\n\n- **Router** picks Hardware Expert, Calculator or Troubleshooter.\n- Every AI Agent uses **Groq** first and switches to **Gemini** if Groq fails.\n- Every step has **Retry On Fail** (3 tries). If an agent still fails, the customer gets a polite \"please try again\".\n- If the workflow crashes, **Email Alert** tells you.\n\n**Edit me:** your details in **Store Info**, your email in **Email Alert**.",
+        "content": "## IT Warehouse - Store Chat\n\nThe website sends **POST /webhook/store-assistant** with `{ \"session_id\": \"...\", \"message\": \"...\" }` (for a sold-out product page: `product_sku` and no message).\nIt answers `{ \"ok\": true, \"agent\": \"...\", \"reply\": \"...\" }`.\n\n- **Router** picks Hardware Expert, Calculator or Troubleshooter.\n- Every AI Agent uses **Groq** first and switches to **Gemini** if Groq fails.\n- Every step has **Retry On Fail** (3 tries). If an agent still fails, the customer gets a polite \"please try again\".\n- **Get Products** reads your Google Sheet (tab **Inventory**) on every message, so changes show up right away.\n- If the workflow crashes, **Email Alert** tells you.\n\n**Edit me:** your Google Sheet in **Get Products**, your details in **Store Info**, your email in **Email Alert**.",
         "color": 5,
         "width": 384,
         "height": 224

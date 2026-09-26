@@ -29,11 +29,17 @@ const storeInfo = node({
 });
 
 const getProducts = node({
-  type: 'n8n-nodes-base.dataTable',
-  version: 1.1,
+  type: 'n8n-nodes-base.googleSheets',
+  version: 4.7,
   config: {
     name: 'Get Products',
-    parameters: { resource: 'row', operation: 'get', dataTableId: { __rl: true, mode: 'list', value: 'xgTZJDsEG067UvCX', cachedResultName: 'inventory' }, returnAll: true },
+    parameters: {
+      resource: 'sheet', operation: 'read', authentication: 'oAuth2',
+      documentId: { __rl: true, mode: 'list', value: '', cachedResultName: 'inventory' },
+      sheetName: { __rl: true, mode: 'name', value: 'Inventory' },
+      options: {}
+    },
+    credentials: { googleSheetsOAuth2Api: { id: 'aiEpt4MCfgtCCgZ1', name: 'Google Sheets account' } },
     alwaysOutputData: true, executeOnce: true,
     retryOnFail: true, maxTries: 3, waitBetweenTries: 2000,
     onError: 'continueRegularOutput',
@@ -47,7 +53,7 @@ const prepare = node({
   version: 2,
   config: {
     name: 'Prepare Request',
-    parameters: { mode: 'runOnceForAllItems', jsCode: "// Read the website's request and turn the product list into text for the AI.\nconst body = $('Webhook').first(0).json.body ?? {};\nconst txt = v => String(v ?? '').trim();\nconst session_id = txt(body.session_id) || 'guest';\nconst sku = txt(body.product_sku).toUpperCase();\n// opened from a sold-out product page with no message yet\nconst message = txt(body.message).slice(0, 1000) || (sku ? `สินค้า ${sku} หมด ช่วยแนะนำตัวอื่นให้หน่อย` : 'สวัสดี');\n\nconst money = n => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\nconst products = $input.all().map(i => i.json).filter(p => p.sku);\nconst products_text = products.map(p => [\n  p.sku, p.name, p.category,\n  `฿${money(p.price_ex_vat)} before VAT, ฿${money(p.price_ex_vat * 1.07)} incl. VAT`,\n  p.stock_qty > 0 ? `in stock: ${p.stock_qty}` : 'SOLD OUT',\n  `tags: ${txt(p.tags)}`,\n  txt(p.description).slice(0, 250),\n].join(' | ')).join('\\n') || 'The product list is not available right now. Do not name any products.';\n\nreturn [{ json: { session_id, message, products_text } }];\n" },
+    parameters: { mode: 'runOnceForAllItems', jsCode: "// Read the website's request and turn the product list (from the Google Sheet) into text for the AI.\nconst body = $('Webhook').first(0).json.body ?? {};\nconst txt = v => String(v ?? '').trim();\nconst num = v => (typeof v === 'number' ? v : txt(v) === '' ? NaN : Number(txt(v).replace(/[^0-9.-]/g, '')));\nconst session_id = txt(body.session_id) || 'guest';\nconst sku = txt(body.product_sku).toUpperCase();\n// opened from a sold-out product page with no message yet\nconst message = txt(body.message).slice(0, 1000) || (sku ? `สินค้า ${sku} หมด ช่วยแนะนำตัวอื่นให้หน่อย` : 'สวัสดี');\n\nconst money = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\n// rows with a missing sku, name or price are skipped\nconst products = $input.all().map(i => i.json)\n  .filter(p => txt(p.sku) && txt(p.name) && Number.isFinite(num(p.price_ex_vat)));\nconst products_text = products.map(p => [\n  txt(p.sku).toUpperCase(), txt(p.name), txt(p.category),\n  `฿${money(num(p.price_ex_vat))} before VAT, ฿${money(num(p.price_ex_vat) * 1.07)} incl. VAT`,\n  num(p.stock_qty) > 0 ? `in stock: ${num(p.stock_qty)}` : 'SOLD OUT',\n  `tags: ${txt(p.tags)}`,\n  txt(p.description).slice(0, 250),\n].join(' | ')).join('\\n') || 'The product list is not available right now. Do not name any products.';\n\nreturn [{ json: { session_id, message, products_text } }];\n" },
     retryOnFail: true, maxTries: 3, waitBetweenTries: 2000,
     position: [660, 300]
   },
@@ -245,7 +251,7 @@ const emailAlert = node({
   output: [{ id: 'msg' }]
 });
 
-const note = sticky("## IT Warehouse - Store Chat\n\nThe website sends **POST /webhook/store-assistant** with `{ \"session_id\": \"...\", \"message\": \"...\" }` (for a sold-out product page: `product_sku` and no message).\nIt answers `{ \"ok\": true, \"agent\": \"...\", \"reply\": \"...\" }`.\n\n- **Router** picks Hardware Expert, Calculator or Troubleshooter.\n- Every AI Agent uses **Groq** first and switches to **Gemini** if Groq fails.\n- Every step has **Retry On Fail** (3 tries). If an agent still fails, the customer gets a polite \"please try again\".\n- If the workflow crashes, **Email Alert** tells you.\n\n**Edit me:** your details in **Store Info**, your email in **Email Alert**.", [webhook, storeInfo], { color: 5 });
+const note = sticky("## IT Warehouse - Store Chat\n\nThe website sends **POST /webhook/store-assistant** with `{ \"session_id\": \"...\", \"message\": \"...\" }` (for a sold-out product page: `product_sku` and no message).\nIt answers `{ \"ok\": true, \"agent\": \"...\", \"reply\": \"...\" }`.\n\n- **Router** picks Hardware Expert, Calculator or Troubleshooter.\n- Every AI Agent uses **Groq** first and switches to **Gemini** if Groq fails.\n- Every step has **Retry On Fail** (3 tries). If an agent still fails, the customer gets a polite \"please try again\".\n- **Get Products** reads your Google Sheet (tab **Inventory**) on every message, so changes show up right away.\n- If the workflow crashes, **Email Alert** tells you.\n\n**Edit me:** your Google Sheet in **Get Products**, your details in **Store Info**, your email in **Email Alert**.", [webhook, storeInfo], { color: 5 });
 
 export default workflow('store-chat', 'IT Warehouse - Store Chat', { settings: { executionOrder: 'v1', executionTimeout: 120, saveDataErrorExecution: 'all' } })
   .add(webhook)
