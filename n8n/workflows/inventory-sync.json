@@ -1,0 +1,1075 @@
+{
+  "id": "x1h6TKuKb4p2eNc5",
+  "name": "Inventory Sync (Google Drive Excel)",
+  "nodes": [
+    {
+      "id": "29315c54-e0ef-5324-9f2c-17321957fc69",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "7a884008-29e4-59d0-b565-27f0a8837329",
+      "name": "Sync Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        400
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "file-name",
+              "name": "file_name",
+              "value": "inventory.xlsx",
+              "type": "string"
+            },
+            {
+              "id": "sheet-name",
+              "name": "sheet_name",
+              "value": "Inventory",
+              "type": "string"
+            },
+            {
+              "id": "allow-big",
+              "name": "allow_big_changes",
+              "value": false,
+              "type": "boolean"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "0185718b-278e-57fb-9627-7322d20135ae",
+      "name": "Sync Now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        500
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "143dd3de-059c-5cb3-a2b2-0f577b8d83ee",
+      "name": "Load Last Status",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        400
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "4vK0pu7qvVs1DUZg",
+          "cachedResultName": "sync_status"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "key",
+              "condition": "eq",
+              "keyValue": "inventory"
+            }
+          ]
+        },
+        "returnAll": false,
+        "limit": 1
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "2d62b8f9-fabb-51f3-bd23-326c3896a9c3",
+      "name": "Read Current Products",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        400
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "xgTZJDsEG067UvCX",
+          "cachedResultName": "inventory"
+        },
+        "returnAll": true
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "3cfe07ce-458a-5879-9837-db248c5c57e3",
+      "name": "Find Excel File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        960,
+        400
+      ],
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "searchMethod": "name",
+        "queryString": "={{ $('Sync Settings').first(0).json.file_name.replace(/\\.xlsx$/i, '') }}",
+        "returnAll": false,
+        "limit": 50,
+        "filter": {
+          "whatToSearch": "files",
+          "includeTrashed": false
+        },
+        "options": {
+          "fields": [
+            "*"
+          ]
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "w5G4HPgVcRe5OMeK",
+          "name": "Google Drive account"
+        }
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "524fc78b-5202-54d3-8d0e-1edbad0ac00d",
+      "name": "Pick Inventory File",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Pick the inventory file: an Excel file (inventory.xlsx) or a Google Sheet (inventory), newest first.\n// Throws when the Drive search failed or found nothing, so the sync stops before anything in the product list changes.\nconst settings = $('Sync Settings').first(0).json;\nconst want = String(settings.file_name ?? 'inventory.xlsx').trim().toLowerCase().replace(/\\.xlsx$/, '');\nconst XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';\nconst SHEET = 'application/vnd.google-apps.spreadsheet';\nconst errText = e => (typeof e === 'string' ? e : e?.message ?? JSON.stringify(e)).slice(0, 300);\n// n8n keeps only the first line of a Code node error, and only the text after its last \":\",\n// so the messages here are one line and use \" - \" instead\nconst plain = s => String(s).replace(/\\s+/g, ' ').replace(/\\s*:\\s*/g, ' - ').replace(/[.\\s]+$/, '');\n\nconst found = $input.all().map(i => i.json ?? {});\nconst failed = found.find(f => f.error !== undefined && !f.id);  // Find Excel File passes its error on as an item\nif (failed) throw new Error(`Google Drive search failed - ${plain(errText(failed.error))}`);\n\nconst files = found\n  .filter(f => f.id && !f.trashed && [XLSX, SHEET].includes(f.mimeType))\n  .filter(f => [want, `${want}.xlsx`].includes(String(f.name ?? '').trim().toLowerCase()))\n  .sort((a, b) => String(b.modifiedTime ?? '').localeCompare(String(a.modifiedTime ?? '')));\n\nif (!files.length) throw new Error(`No Excel file \"${want}.xlsx\" or Google Sheet \"${want}\" found in Google Drive`);\nconst f = files[0];\nreturn [{ json: { id: f.id, name: f.name, mimeType: f.mimeType, modifiedTime: f.modifiedTime ?? '', other_copies: files.length - 1 } }];\n"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "0049fe42-4768-50df-9e14-2f69bcbd4cac",
+      "name": "Record Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4320,
+        500
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// What happened in this run, and should the owner hear about it?\n// Email when the sync has failed twice in a row (so a one-off Google Drive hiccup that fixes itself\n// stays quiet), when it works again after that email, and when the list of spreadsheet problems changes.\n// Never every 5 minutes for the same thing.\nconst ALERT_AFTER_FAILS = 2;  // failed runs in a row before emailing (runs are 5 minutes apart)\nconst txt = v => String(v ?? '').trim();\nconst errText = e => (typeof e === 'string' ? e : e?.message ?? JSON.stringify(e ?? ''))\n  .replace(/\\s*\\[line \\d+[^\\]]*\\]\\s*$/, '').trim().slice(0, 500);\nconst sentence = s => (/[.!?]$/.test(s) ? s : `${s}.`);\nconst STEPS = ['Pick Inventory File', 'Download File', 'Validate & Clean'];  // the steps with an error output\n\nlet last = {};\ntry { last = $('Load Last Status').first(0)?.json ?? {}; } catch (e) {}\nconst input = $input.first()?.json ?? {};\n\nlet ok, message, problems = [], fileSignature = '', applied = false;\nif (input.error) {\n  // a step failed before anything changed: find which one\n  let step = 'A step';\n  for (const s of STEPS) {\n    try { if ($(s).isExecuted && $(s).all(1).length) { step = s; break; } } catch (e) {}\n  }\n  ok = false;\n  message = `Inventory sync failed at \"${step}\": ${sentence(errText(input.error))} The chat keeps using the last good product list.`;\n} else {\n  const v = $('Validate & Clean').first(0).json;\n  problems = v.problems ?? [];\n  fileSignature = txt(v.problems_signature);\n  if (!v.safe) {\n    ok = false;\n    message = `Inventory sync blocked, nothing was changed. ${v.reason}`;\n  } else {\n    applied = true;\n    const r = input;  // from Removals Done\n    const failures = (r.save_failed ?? 0) + (r.delete_failed ?? 0);\n    ok = failures === 0;\n    message = `Synced ${v.products_in_file} products: ${r.saved ?? 0} added or updated, ${r.deleted ?? 0} removed.`\n      + (failures ? ` ${failures} change(s) could not be saved and will be retried on the next sync.` : '')\n      + (problems.length ? ` ${problems.length} row(s) in the spreadsheet need fixing.` : '');\n  }\n}\n\nconst fails = ok ? 0 : (Number(last.fails) || 0) + 1;\nconst wasAlerted = last.down_alerted === true;\nconst broke = !ok && !wasAlerted && fails >= ALERT_AFTER_FAILS;\nconst recovered = ok && wasAlerted;\nconst down_alerted = !ok && (wasAlerted || broke);\n// Row problems are only news when the file was applied; a failed or blocked run keeps the last known list.\nconst signature = applied ? fileSignature : txt(last.problems_signature);\nconst newProblems = applied && signature !== '' && signature !== txt(last.problems_signature);\nconst alert = broke || recovered || newProblems;\n\nconst lines = problems.slice(0, 25).map(p => `- ${p.product}: ${p.issue} (${p.action})`);\nconst detail = [message, lines.length ? `\\nRows to fix in the spreadsheet:\\n${lines.join('\\n')}` : ''].join('\\n').trim();\nconst subject = !alert ? ''\n  : broke ? 'Inventory sync stopped'\n  : recovered ? 'Inventory sync works again'\n  : `Spreadsheet rows need fixing: ${problems[0]?.product ?? ''}${problems.length > 1 ? ` and ${problems.length - 1} more` : ''}`;\n\nreturn [{ json: {\n  ok, fails, down_alerted, message: message.slice(0, 1000), problems_signature: signature.slice(0, 4000),\n  alert, alert_subject: subject.slice(0, 200), alert_detail: detail.slice(0, 4000),\n} }];\n"
+      }
+    },
+    {
+      "id": "38f473d9-3919-5e11-af2b-52b52a849f03",
+      "name": "Download File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1440,
+        400
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.id }}"
+        },
+        "options": {
+          "binaryPropertyName": "data",
+          "googleFileConversion": {
+            "conversion": {
+              "sheetsToFormat": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "w5G4HPgVcRe5OMeK",
+          "name": "Google Drive account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "834cac0c-b958-5cb8-bb10-054fd56b20d7",
+      "name": "Read Excel Rows",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        400
+      ],
+      "parameters": {
+        "operation": "xlsx",
+        "binaryPropertyName": "data",
+        "options": {
+          "sheetName": "={{ $('Sync Settings').first(0).json.sheet_name }}",
+          "headerRow": true,
+          "includeEmptyCells": true
+        }
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "50398dd2-0034-5074-96a7-06e43f8f7160",
+      "name": "Validate & Clean",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Validate & Clean: checks every Excel row and works out what to change in the product list.\n// In:  one item per Excel row (from Read Excel Rows) + the current products (from Read Current Products)\n// Out: ONE item: { safe, reason, upserts[], removed[], problems[] }\nconst FIELDS = ['sku', 'name', 'category', 'price_ex_vat', 'stock_qty', 'image_url', 'description', 'tags'];\nconst REQUIRED = ['sku', 'name', 'category', 'price_ex_vat', 'stock_qty'];\nconst CATEGORIES = ['mouse', 'keyboard', 'headset', 'monitor', 'webcam', 'mousepad', 'speaker', 'accessory'];\n// Refuse to sync when a file suddenly has far fewer valid products than the store has now\n// (wrong file or sheet, rows deleted by mistake). Set allow_big_changes in Sync Settings to accept it once.\nconst MIN_KEEP_SHARE = 0.3;\nconst settings = $('Sync Settings').first(0)?.json ?? {};\nconst allowBigChanges = settings.allow_big_changes === true;\n\nconst key = k => String(k).trim().toLowerCase().replace(/[\\s-]+/g, '_');\nconst txt = v => String(v ?? '').trim();\nconst num = v => (typeof v === 'number' ? v\n  : txt(v) === '' ? NaN : Number(txt(v).replace(/บาท|thb|฿|,|\\s/gi, '')));\nconst same = (a, b) => FIELDS.every(f => String(a[f] ?? '') === String(b[f] ?? ''));\n\n// Read Current Products and Read Excel Rows pass a failure on as an item like { error: '...' }\nconst isError = j => j.error !== undefined && Object.keys(j).every(k => ['error', 'message', 'details'].includes(k));\nconst errText = e => (typeof e === 'string' ? e : e?.message ?? JSON.stringify(e)).slice(0, 300);\n// n8n keeps only the first line of a Code node error, and only the text after its last \":\",\n// so the messages here are one line and use \" - \" instead\nconst plain = s => String(s).replace(/\\s+/g, ' ').replace(/\\s*:\\s*/g, ' - ').replace(/[.\\s]+$/, '');\n\n// last good copy of every product (the Data table); a single empty item means the table is empty\nconst current = $('Read Current Products').all(0).map(i => i.json ?? {});\nconst readFail = current.find(isError);\nif (readFail) throw new Error(`Could not read the store's product list - ${plain(errText(readFail.error))}`);\nif (current.some(j => Object.keys(j).length && !('sku' in j))) throw new Error(\"Could not read the store's product list - unexpected data\");\nconst cache = new Map(current.filter(j => j.sku).map(j => [j.sku, j]));\n\n// Excel rows, header names normalised (\"Stock Qty\" -> \"stock_qty\")\nconst excel = $input.all().map(i => i.json ?? {});\nconst fileFail = excel.find(isError);\nif (fileFail) throw new Error(`Could not read the Excel file - ${plain(errText(fileFail.error))}`);\nconst rows = excel.map(j => Object.fromEntries(Object.entries(j).map(([k, v]) => [key(k), v])));\nif (!rows.some(r => Object.keys(r).length)) throw new Error('The Inventory sheet has no rows');\nconst headers = new Set(rows.flatMap(r => Object.keys(r)));\nconst missing = REQUIRED.filter(h => !headers.has(h));\nif (missing.length) throw new Error(`The Inventory sheet is missing column(s) ${missing.join(', ')}`);\n\nconst upserts = [], problems = [], inFile = new Set();\nlet valid = 0, prevSku = '';\nrows.forEach(r => {\n  if (FIELDS.every(f => txt(r[f]) === '')) return; // empty line\n  const sku = txt(r.sku).toUpperCase();            // SKUs are stored in upper case\n  // blank lines are dropped before this node, so name the product instead of an Excel row number\n  const product = sku ? `${sku} (${txt(r.name) || 'no name'})`\n    : txt(r.name) ? `\"${txt(r.name)}\" (no sku)` : `the row after ${prevSku || 'the header'}`;\n  if (sku) prevSku = sku;\n  const p = {\n    sku,\n    name: txt(r.name),\n    category: txt(r.category).toLowerCase(),\n    price_ex_vat: Math.round(num(r.price_ex_vat) * 100) / 100,\n    stock_qty: num(r.stock_qty),\n    image_url: txt(r.image_url),\n    description: txt(r.description).slice(0, 1000),\n    tags: txt(r.tags).toLowerCase(),\n  };\n\n  if (sku && inFile.has(sku)) {\n    problems.push({ product, issue: 'duplicate sku', action: 'ignored (the first row with this sku is used)' });\n    return;\n  }\n  if (sku) inFile.add(sku); // present in the file → never removed, even if this row has mistakes\n\n  const errors = [];\n  if (!sku) errors.push('sku is empty');\n  if (!p.name) errors.push('name is empty');\n  if (!p.category) errors.push('category is empty');\n  if (!Number.isFinite(p.price_ex_vat) || p.price_ex_vat < 0) errors.push(`price_ex_vat \"${txt(r.price_ex_vat)}\" is not a valid price`);\n  if (!Number.isInteger(p.stock_qty) || p.stock_qty < 0) errors.push(`stock_qty \"${txt(r.stock_qty)}\" is not a whole number >= 0`);\n  if (errors.length) {\n    problems.push({ product, issue: errors.join('; '),\n                    action: cache.has(sku) ? 'kept the last good version' : 'not added' });\n    return;\n  }\n\n  // warnings: the row is still saved\n  if (!CATEGORIES.includes(p.category)) problems.push({ product, issue: `unknown category \"${p.category}\"`, action: 'saved' });\n  if (p.image_url && !/^https?:\\/\\//i.test(p.image_url)) {\n    problems.push({ product, issue: 'image_url is not a link', action: 'saved without image' });\n    p.image_url = '';\n  }\n\n  valid++;\n  const old = cache.get(sku);\n  if (!old || !same(old, p)) upserts.push(p); // only new or changed products are written\n});\n\nconst removed = [...cache.keys()].filter(sku => !inFile.has(sku));\nconst shrinks = cache.size >= 10 && valid < cache.size * MIN_KEEP_SHARE;\nconst safe = valid > 0 && (!shrinks || allowBigChanges);\nconst reason = valid === 0 ? 'No valid products in the file'\n  : !safe ? `The file has only ${valid} valid products, but the store has ${cache.size}. Wrong file or sheet? `\n    + 'If this is right, set allow_big_changes to true in Sync Settings, run the sync once, then set it back to false.'\n  : '';\n\nreturn [{ json: {\n  safe, reason,\n  upserts,\n  removed: removed.map(sku => ({ sku })),\n  problems,\n  problems_signature: problems.map(p => `${p.product}: ${p.issue}`).join('\\n'),\n  products_in_file: valid,\n  products_before: cache.size,\n} }];\n"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "02927161-6232-559d-a651-8524b38e50e8",
+      "name": "Safe to Apply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2160,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.safe }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "72466114-2f96-54ee-9469-9c7f4d8f1f6a",
+      "name": "Any Updates?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2400,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.upserts.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "bdeaf595-3bf6-50bd-a0dc-09c30b974e55",
+      "name": "Split Updates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// One item per new or changed product, for Save Product.\nreturn $('Validate & Clean').first(0).json.upserts.map(json => ({ json }));\n"
+      }
+    },
+    {
+      "id": "e980a653-b9d1-5044-9555-331991b399c9",
+      "name": "Saves Done",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Count what Save Product did (it reports a failed row as an item with an error instead of stopping).\n// A failed row is simply tried again by the next sync.\nlet saved = 0;\nconst failed = [];\nif ($('Save Product').isExecuted) {\n  for (const i of $('Save Product').all(0)) {\n    if (i.json?.error) failed.push(String(i.json.error?.message ?? i.json.error));\n    else if (i.json?.sku) saved++;\n  }\n}\nreturn [{ json: { saved, save_failures: failed.slice(0, 10), save_failed: failed.length } }];\n"
+      }
+    },
+    {
+      "id": "d89f22e1-4916-5f50-8350-8aa08cbcaf5d",
+      "name": "Save Product",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2880,
+        200
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "xgTZJDsEG067UvCX",
+          "cachedResultName": "inventory"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "sku",
+              "condition": "eq",
+              "keyValue": "={{ $json.sku }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "category",
+              "displayName": "category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "price_ex_vat",
+              "displayName": "price_ex_vat",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "stock_qty",
+              "displayName": "stock_qty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "image_url",
+              "displayName": "image_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "description",
+              "displayName": "description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tags",
+              "displayName": "tags",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "268b2467-503e-59b1-b3d5-4c62223f693c",
+      "name": "Any Removals?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3360,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Validate & Clean').first(0).json.removed.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "25f7b80c-d259-5cd9-bf14-40f0c0e7e37c",
+      "name": "Split Removals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3600,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// One item per product that is no longer in the file, for Delete Product. Never an empty SKU.\nreturn $('Validate & Clean').first(0).json.removed\n  .filter(r => r && String(r.sku ?? '').trim())\n  .map(r => ({ json: { sku: String(r.sku).trim() } }));\n"
+      }
+    },
+    {
+      "id": "65889d17-ed6f-546c-8a6c-c63359ecdb4f",
+      "name": "Removals Done",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4080,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Count what Delete Product did. A failed delete is simply tried again by the next sync.\nlet deleted = 0;\nconst failed = [];\nif ($('Delete Product').isExecuted) {\n  for (const i of $('Delete Product').all(0)) {\n    if (i.json?.error) failed.push(String(i.json.error?.message ?? i.json.error));\n    else if (i.json?.sku) deleted++;  // an empty item means the product was already gone\n  }\n}\nconst saves = $('Saves Done').first(0)?.json ?? { saved: 0, save_failed: 0, save_failures: [] };\nreturn [{ json: { ...saves, deleted, delete_failures: failed.slice(0, 10), delete_failed: failed.length } }];\n"
+      }
+    },
+    {
+      "id": "bc848cf9-219d-5eda-8d56-ae54c47ef5ea",
+      "name": "Delete Product",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        3840,
+        200
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "xgTZJDsEG067UvCX",
+          "cachedResultName": "inventory"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "sku",
+              "condition": "eq",
+              "keyValue": "={{ $json.sku }}"
+            }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "0002d53f-ed51-5310-9925-ea308ba6dcc0",
+      "name": "Save Status",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        4560,
+        500
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "4vK0pu7qvVs1DUZg",
+          "cachedResultName": "sync_status"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "key",
+              "condition": "eq",
+              "keyValue": "inventory"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "key": "inventory",
+            "ok": "={{ $json.ok }}",
+            "message": "={{ $json.message }}",
+            "problems_signature": "={{ $json.problems_signature }}",
+            "fails": "={{ $json.fails }}",
+            "down_alerted": "={{ $json.down_alerted }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "key",
+              "displayName": "key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ok",
+              "displayName": "ok",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "problems_signature",
+              "displayName": "problems_signature",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "fails",
+              "displayName": "fails",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "down_alerted",
+              "displayName": "down_alerted",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "a4a96298-50c7-539f-bf08-3543bd9bae46",
+      "name": "Alert Owner?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4800,
+        500
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Record Result').first(0).json.alert }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "1762bcc6-9689-512c-a74c-e6c36639a504",
+      "name": "Alert Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5040,
+        420
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// The alert for the Error Handler: it logs it and emails the owner.\n// always_email: this workflow already decides when to email, so the Error Handler must not hold it back.\nconst r = $('Record Result').first(0).json;\nreturn [{ json: { workflow_name: 'Inventory Sync', message: r.alert_subject, detail: r.alert_detail, always_email: true } }];\n"
+      }
+    },
+    {
+      "id": "2f3d4c4c-3e38-579e-9f04-e54072262ddc",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        5280,
+        420
+      ],
+      "parameters": {
+        "mode": "once",
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "TMxtguyRFd087DPT",
+          "cachedResultName": "Error Handler (alerts and log)"
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "f5f85599-a9c1-5db5-bdba-fc3ef8bc2db8",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        208
+      ],
+      "parameters": {
+        "content": "## Inventory Sync: Excel on Google Drive -> store product list\n\nEvery 5 minutes this reads **inventory.xlsx** (or a Google Sheet named **inventory**) from Google Drive, sheet **Inventory**, and updates the **inventory** data table that the Store Assistant answers from.\n\n**The chat never reads Google Drive directly.** If Drive is down, the file is missing or a cell is wrong, customers keep getting answers from the last good product list.\n\n- Rows with mistakes (missing price, text in a number cell) are skipped, and the product keeps its last good version.\n- A file with far fewer products than the store has (wrong file or sheet) is not applied. If the change is intended, set **allow_big_changes** in **Sync Settings** to true, run **Sync Now** once, then set it back to false.\n- Google Drive steps retry on their own. Anything that still fails is tried again on the next run (every step is safe to repeat).\n- You get an email (through the **Error Handler**) when the sync has failed twice in a row, when it works again, and when there are new rows to fix. A one-off hiccup that fixes itself stays quiet, and you never get the same email every 5 minutes.\n\nThe latest result is always in the **sync_status** data table.",
+        "color": 5,
+        "width": 400,
+        "height": 432
+      }
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Sync Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sync Settings": {
+      "main": [
+        [
+          {
+            "node": "Load Last Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sync Now": {
+      "main": [
+        [
+          {
+            "node": "Sync Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Last Status": {
+      "main": [
+        [
+          {
+            "node": "Read Current Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Current Products": {
+      "main": [
+        [
+          {
+            "node": "Find Excel File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Excel File": {
+      "main": [
+        [
+          {
+            "node": "Pick Inventory File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Inventory File": {
+      "main": [
+        [
+          {
+            "node": "Download File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Result": {
+      "main": [
+        [
+          {
+            "node": "Save Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download File": {
+      "main": [
+        [
+          {
+            "node": "Read Excel Rows",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Excel Rows": {
+      "main": [
+        [
+          {
+            "node": "Validate & Clean",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Clean": {
+      "main": [
+        [
+          {
+            "node": "Safe to Apply?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Safe to Apply?": {
+      "main": [
+        [
+          {
+            "node": "Any Updates?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Updates?": {
+      "main": [
+        [
+          {
+            "node": "Split Updates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Saves Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Updates": {
+      "main": [
+        [
+          {
+            "node": "Save Product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Saves Done": {
+      "main": [
+        [
+          {
+            "node": "Any Removals?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Product": {
+      "main": [
+        [
+          {
+            "node": "Saves Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Removals?": {
+      "main": [
+        [
+          {
+            "node": "Split Removals",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Removals Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Removals": {
+      "main": [
+        [
+          {
+            "node": "Delete Product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Removals Done": {
+      "main": [
+        [
+          {
+            "node": "Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Product": {
+      "main": [
+        [
+          {
+            "node": "Removals Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Status": {
+      "main": [
+        [
+          {
+            "node": "Alert Owner?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Owner?": {
+      "main": [
+        [
+          {
+            "node": "Alert Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Payload": {
+      "main": [
+        [
+          {
+            "node": "Send Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 240,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": true,
+    "errorWorkflow": "TMxtguyRFd087DPT"
+  }
+}
