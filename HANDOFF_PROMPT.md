@@ -22,11 +22,11 @@ Reply: `{ "ok": true, "agent": "Hardware Expert | Calculator | Troubleshooter", 
 Steps, in order:
 1. **Webhook**: receives the customer's message.
 2. **Store Info** (Set node): store name, contact, opening hours, warranty/return policy. The owner edits this.
-3. **Get Products** (Google Sheets node): reads all rows from the Google Sheet, tab *Inventory*, with columns sku, name, category, price_ex_vat, stock_qty, image_url, description, tags.
-4. **Prepare Request** (Code): cleans the message, skips incomplete rows, and turns the product list into text: SKU, name, category, price before and incl. VAT 7%, in stock / SOLD OUT, tags, description.
+3. **Get Products** (Google Sheets node): reads all rows from the Google Sheet, tab *Inventory*, with columns sku, name, category, price_ex_vat, stock_qty, image_url, description, tags. The sheet holds 2,964 PC parts in 10 categories (CPU, CPU cooler, case, GPU, HDD, monitor, motherboard, PSU, RAM, SSD), converted from a PC-parts dataset: prices from US dollars at 1 USD = 35 THB, sample stock numbers, no images.
+4. **Prepare Request** (Code): cleans the message and picks only the ~30 products that match the question (product type in Thai or English, model names like "RTX 4070", plus in-stock alternatives at a similar price; a follow-up like "for gaming" keeps the previous search), because the full list is too big to send to the AI every time. It turns them into text: SKU, name, category, price before and incl. VAT 7%, in stock / SOLD OUT, tags, description.
 5. **Router** (AI Agent): reads the message and answers one word, *hardware*, *calculator* or *troubleshooter*.
 6. **Route** (Switch): sends the message to one of three specialist AI Agents:
-   - **Hardware Expert**: recommends products for the customer's use (gaming, office, design). **Sold-out rule:** if the product is sold out, it first asks *"What will you use it for?"*, then recommends 1–3 in-stock alternatives with one trade-off each.
+   - **Hardware Expert**: recommends products for the customer's use (gaming, office, design) and checks that PC parts fit together (CPU socket, RAM type, power supply watts). **Sold-out rule:** if the product is sold out, it first asks *"What will you use it for?"*, then recommends 1–3 in-stock alternatives with one trade-off each.
    - **Calculator**: prices, totals and VAT 7% for quantities, using a **Calculator tool** so the math is exact.
    - **Troubleshooter**: numbered fix steps, warranty/returns from Store Info, hands over to staff when needed.
 7. **Reply to Website** (Respond to Webhook): sends the answer back.

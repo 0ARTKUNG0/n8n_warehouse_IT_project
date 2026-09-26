@@ -3,7 +3,7 @@
   "name": "IT Warehouse - Store Chat",
   "nodes": [
     {
-      "id": "a6d88ac6-8bb1-476a-9469-21244d02576b",
+      "id": "cd3527d6-c4fb-49cd-9dc6-47ef0db4972d",
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
@@ -17,10 +17,10 @@
         "responseMode": "responseNode",
         "options": {}
       },
-      "webhookId": "e21cab58-40ac-4351-a834-fa3095904de2"
+      "webhookId": "c4a6c6a5-8f14-44ea-bb01-3f83bed27e8b"
     },
     {
-      "id": "63cc1757-a3f1-4ef1-a1df-edfa873c63ce",
+      "id": "835a2084-5705-4174-9049-0b8e2d149edb",
       "name": "Store Info",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
@@ -65,7 +65,7 @@
       "waitBetweenTries": 2000
     },
     {
-      "id": "8a22b86b-154f-4cdb-bce5-3f872946567d",
+      "id": "478314dc-9bbb-4c68-a747-dc897e6fb8d3",
       "name": "Get Products",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.7,
@@ -104,7 +104,7 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "8ab82e5a-bdec-4a1a-98e1-9b4dc378a7a8",
+      "id": "0544e623-d77c-4094-ae56-96425a4b8e0d",
       "name": "Prepare Request",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -114,14 +114,14 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Read the website's request and turn the product list (from the Google Sheet) into text for the AI.\nconst body = $('Webhook').first(0).json.body ?? {};\nconst txt = v => String(v ?? '').trim();\nconst num = v => (typeof v === 'number' ? v : txt(v) === '' ? NaN : Number(txt(v).replace(/[^0-9.-]/g, '')));\nconst session_id = txt(body.session_id) || 'guest';\nconst sku = txt(body.product_sku).toUpperCase();\n// opened from a sold-out product page with no message yet\nconst message = txt(body.message).slice(0, 1000) || (sku ? `สินค้า ${sku} หมด ช่วยแนะนำตัวอื่นให้หน่อย` : 'สวัสดี');\n\nconst money = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\n// rows with a missing sku, name or price are skipped\nconst products = $input.all().map(i => i.json)\n  .filter(p => txt(p.sku) && txt(p.name) && Number.isFinite(num(p.price_ex_vat)));\nconst products_text = products.map(p => [\n  txt(p.sku).toUpperCase(), txt(p.name), txt(p.category),\n  `฿${money(num(p.price_ex_vat))} before VAT, ฿${money(num(p.price_ex_vat) * 1.07)} incl. VAT`,\n  num(p.stock_qty) > 0 ? `in stock: ${num(p.stock_qty)}` : 'SOLD OUT',\n  `tags: ${txt(p.tags)}`,\n  txt(p.description).slice(0, 250),\n].join(' | ')).join('\\n') || 'The product list is not available right now. Do not name any products.';\n\nreturn [{ json: { session_id, message, products_text } }];\n"
+        "jsCode": "// Read the website's request, pick the products that match the question (at most 30)\n// and turn them into text for the AI. The whole sheet is too big to send on every message.\nconst body = $('Webhook').first(0).json.body ?? {};\nconst txt = v => String(v ?? '').trim();\nconst num = v => (typeof v === 'number' ? v : txt(v) === '' ? NaN : Number(txt(v).replace(/[^0-9.-]/g, '')));\nconst session_id = txt(body.session_id) || 'guest';\nconst sku = txt(body.product_sku).toUpperCase();\n// opened from a sold-out product page with no message yet\nconst message = txt(body.message).slice(0, 1000) || (sku ? `สินค้า ${sku} หมด ช่วยแนะนำตัวอื่นให้หน่อย` : 'สวัสดี');\nconst m = message.toLowerCase();\n\n// rows with a missing sku, name or price are skipped\nconst products = $input.all().map(i => i.json)\n  .filter(p => txt(p.sku) && txt(p.name) && Number.isFinite(num(p.price_ex_vat)))\n  .map(p => ({ ...p, sku: txt(p.sku).toUpperCase(), category: txt(p.category).toLowerCase(), price: num(p.price_ex_vat), stock: num(p.stock_qty) || 0,\n               hay: ` ${txt(p.sku)} ${txt(p.name)} ${txt(p.tags)} ${txt(p.description)} `.toLowerCase() }))\n  .map(p => ({ ...p, hay2: p.hay.replace(/\\s+/g, '') }));  // \"16gb\" also finds \"16 GB\"\n\n// words that name a category, Thai and English\nconst CATEGORY_WORDS = {\n  gpu: ['การ์ดจอ', 'gpu', 'graphics card', 'rtx', 'gtx', 'radeon', 'geforce'],\n  cpu: ['ซีพียู', 'cpu', 'processor', 'ryzen', 'core i3', 'core i5', 'core i7', 'core i9', 'ultra 5', 'ultra 7'],\n  'cpu-cooler': ['ระบายความร้อน', 'ซิงค์', 'ชุดน้ำ', 'cooler', 'heatsink', 'aio'],\n  motherboard: ['เมนบอร์ด', 'เมนบอด', 'motherboard', 'mainboard'],\n  ram: ['แรม', 'ram', 'ddr4', 'ddr5'],\n  ssd: ['ssd', 'nvme', 'm.2'],\n  hdd: ['ฮาร์ดดิสก์', 'hdd', 'hard disk', 'harddisk'],\n  psu: ['พาวเวอร์', 'psu', 'power supply', 'วัตต์'],\n  case: ['เคส', 'case'],\n  monitor: ['จอ', 'นิ้ว', 'monitor', 'inch'],\n};\nconst esc = w => w.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\nconst has = (text, w) => /^[a-z0-9 .]+$/.test(w) ? new RegExp(`(^|[^a-z0-9])${esc(w)}([^a-z0-9]|$)`).test(text) : text.includes(w);\nconst STOP = new Set(['the', 'for', 'and', 'with', 'what', 'how', 'much', 'is', 'are', 'do', 'you', 'have', 'vat', 'price', 'total', 'buy', 'want', 'need', 'can', 'my', 'me', 'it', 'in', 'of', 'to', 'a', 'an', 'or', 'pc', 'gb', 'tb']);\n\nconst noGpu = m.replace(/การ์ดจอ/g, ' ');  // \"การ์ดจอ\" (graphics card) is not a monitor\nlet cats = Object.keys(CATEGORY_WORDS).filter(c => CATEGORY_WORDS[c].some(w => has(c === 'monitor' ? noGpu : m, w)));\nlet terms = (m.match(/[a-z0-9][a-z0-9.+-]*/g) ?? []).filter(t => t.length >= 2 && !STOP.has(t));\nconst asked = sku && products.find(p => p.sku === sku);\nif (asked) { cats = [...new Set([...cats, asked.category])]; terms = [...terms, sku.toLowerCase()]; }\n\n// a follow-up like \"for gaming\" names no product type: keep this chat's last search and add to it\nlet memo = { searches: {} };\ntry { memo = $getWorkflowStaticData('global'); memo.searches = memo.searches ?? {}; } catch (e) {}\nconst now = Date.now();\nfor (const [k, v] of Object.entries(memo.searches)) if (now - v.at > 24 * 3600e3) delete memo.searches[k];\nconst last = memo.searches[session_id];\nif (!cats.length && last) { cats = last.cats; terms = [...new Set([...last.terms, ...terms])].slice(-8); }\n// a word that only a few products have (a model like \"5600x\") counts more than a common one (\"ddr4\")\n// \"16gb\" or \"144hz\" may be written \"16 GB\" / \"144 Hz\" in the sheet; other words must match as they are\nconst found = (p, t) => p.hay.includes(t) || (/\\d/.test(t) && /[a-z]/.test(t) && p.hay2.includes(t));\nconst matches = p => terms.filter(t => found(p, t));\nconst df = Object.fromEntries(terms.map(t => [t, products.filter(p => found(p, t)).length]));\nconst score = p => matches(p).reduce((sum, t) => sum + 1 / df[t], 0);\nconst specific = p => matches(p).some(t => df[t] <= 20);\nconst scored = products.map(p => ({ p, s: score(p) }))\n  .filter(x => x.s > 0 && (!cats.length || cats.includes(x.p.category) || specific(x.p)))\n  .sort((a, b) => b.s - a.s || (b.p.stock > 0) - (a.p.stock > 0) || a.p.price - b.p.price);\n// best matches, taking turns between product types so \"CPU and RAM\" gets both\nconst groups = new Map();\nfor (const { p } of scored) { if (!groups.has(p.category)) groups.set(p.category, []); groups.get(p.category).push(p); }\nlet picks = [];\nwhile (picks.length < 16 && [...groups.values()].some(g => g.length)) {\n  for (const g of groups.values()) if (g.length && picks.length < 16) picks.push(g.shift());\n}\n// in-stock alternatives of the same types: closest in price to the best match, or spread over all prices\nconst types = cats.length ? cats : [...new Set(picks.map(p => p.category))];\nconst each = Math.max(3, Math.floor((30 - picks.length) / Math.max(1, types.length)));\nfor (const type of types) {\n  const anchor = picks.find(p => p.category === type)?.price;\n  let pool = products.filter(p => p.category === type && p.stock > 0 && !picks.includes(p));\n  if (anchor !== undefined) pool.sort((a, b) => Math.abs(a.price - anchor) - Math.abs(b.price - anchor));\n  else { pool.sort((a, b) => a.price - b.price); const step = pool.length / each; pool = Array.from({ length: Math.min(each, pool.length) }, (_, i) => pool[Math.floor(i * step)]); }\n  picks.push(...pool.slice(0, each));\n}\npicks = picks.slice(0, 30);\nif (!picks.length) {\n  // nothing named yet (\"hello\"): a few in-stock products from every category\n  const byCat = {};\n  for (const p of products.filter(p => p.stock > 0).sort((a, b) => a.price - b.price)) (byCat[p.category] ??= []).push(p);\n  picks = Object.values(byCat).flatMap(list => list.slice(0, 3)).slice(0, 30);\n}\nif (terms.length || cats.length) memo.searches[session_id] = { terms, cats, at: now };\n\nconst money = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\nconst lines = picks.map(p => [\n  p.sku, txt(p.name), p.category,\n  `฿${money(p.price)} before VAT, ฿${money(p.price * 1.07)} incl. VAT`,\n  p.stock > 0 ? `in stock: ${p.stock}` : 'SOLD OUT',\n  `tags: ${txt(p.tags)}`,\n  txt(p.description).slice(0, 250),\n].join(' | '));\nconst products_text = products.length\n  ? `(The store has ${products.length} products; these ${lines.length} match this question best. If what the customer wants isn't listed, ask for the exact model or type instead of saying the store doesn't have it.)\\n${lines.join('\\n')}`\n  : 'The product list is not available right now. Do not name any products.';\n\nreturn [{ json: { session_id, message, products_text } }];\n"
       },
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 2000
     },
     {
-      "id": "e6373cee-b4e1-41c6-9f19-fc3701ff33ea",
+      "id": "4765098f-3ac4-4f0d-9a31-48dcb70505f8",
       "name": "Router",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
@@ -145,7 +145,7 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "6945ec9f-a1a4-4ee3-858d-8594495d7df6",
+      "id": "56cba3e8-1a9f-4f94-be48-218afc5ebcfe",
       "name": "Groq (main model)",
       "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
       "typeVersion": 1,
@@ -168,7 +168,7 @@
       }
     },
     {
-      "id": "2793fe44-d18c-4dc8-9a36-52132c2b52b6",
+      "id": "9c06f015-7b42-45b4-92aa-b86b45363723",
       "name": "Gemini (backup model)",
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1.1,
@@ -191,7 +191,7 @@
       }
     },
     {
-      "id": "bdc28053-b4df-40b3-bdce-27b6ef9acf00",
+      "id": "60ab7963-a8b1-47c1-a266-1aaac86794e0",
       "name": "Route",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.4,
@@ -259,7 +259,7 @@
       "waitBetweenTries": 2000
     },
     {
-      "id": "96f345e6-db6b-47fd-9bcd-bf6eb8daf89c",
+      "id": "11be0cbe-87d1-48f6-84db-ce50ee87c177",
       "name": "Calculator",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
@@ -283,7 +283,7 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "dbaa3520-85a7-412b-a539-85ee08c2673b",
+      "id": "b06f6364-6f53-4a0b-9c24-2829ff0a0cd9",
       "name": "Chat Memory",
       "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
       "typeVersion": 1.4,
@@ -298,7 +298,7 @@
       }
     },
     {
-      "id": "c9b1eb85-61ef-4332-987c-2f27a0907883",
+      "id": "9470c265-ffdb-435c-974c-ae3038b4ae85",
       "name": "Calculator Tool",
       "type": "@n8n/n8n-nodes-langchain.toolCalculator",
       "typeVersion": 1,
@@ -309,7 +309,7 @@
       "parameters": {}
     },
     {
-      "id": "c54ca5ff-ae0e-4b65-8c87-630b27817291",
+      "id": "bb82934d-cea6-4935-888f-7251ed577c0f",
       "name": "Troubleshooter",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
@@ -333,7 +333,7 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "7a7b7b2e-92eb-45c9-ad50-7e154bbe1534",
+      "id": "09570bdd-e60d-4b67-93aa-af74236f7a7a",
       "name": "Hardware Expert",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
@@ -346,7 +346,7 @@
         "text": "={{ $('Prepare Request').first(0).json.message }}",
         "needsFallback": true,
         "options": {
-          "systemMessage": "=You are the Hardware Expert of {{ $('Store Info').first(0).json.store_name }}, a computer-hardware store in Thailand. Reply in the customer's language (Thai or English), short and friendly.\nRecommend products that fit what the customer will use them for (competitive gaming, casual gaming, office or study, design). Give the price incl. VAT and say if it is in stock. Only use products from PRODUCTS; never invent products, specs or prices.\nSOLD-OUT RULE: if the product the customer wants is SOLD OUT, say so and first ask what they will use it for (for example FPS/MOBA gaming, office work, design). Do not recommend anything yet. When they answer, recommend 1-3 IN-STOCK products that fit that use, each with one short trade-off compared with the product they wanted.\n\nPRODUCTS (sku | name | category | price | stock | tags | description):\n{{ $('Prepare Request').first(0).json.products_text }}",
+          "systemMessage": "=You are the Hardware Expert of {{ $('Store Info').first(0).json.store_name }}, a computer-hardware store in Thailand. Reply in the customer's language (Thai or English), short and friendly.\nRecommend products that fit what the customer will use them for (competitive gaming, casual gaming, office or study, design, video editing). Give the price incl. VAT and say if it is in stock. Only use products from PRODUCTS; never invent products, specs or prices.\nFor PC parts, check that they fit together using the descriptions (CPU socket = motherboard socket, RAM type = motherboard memory type, enough power supply watts for the graphics card) and mention it.\nSOLD-OUT RULE: if the product the customer wants is SOLD OUT, say so and first ask what they will use it for (for example FPS/MOBA gaming, office work, design). Do not recommend anything yet. When they answer, recommend 1-3 IN-STOCK products that fit that use, each with one short trade-off compared with the product they wanted.\n\nPRODUCTS (sku | name | category | price | stock | tags | description):\n{{ $('Prepare Request').first(0).json.products_text }}",
           "maxIterations": 3,
           "enableStreaming": false
         }
@@ -357,7 +357,7 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "2feec9ef-717e-48aa-9da2-b7bec0842af4",
+      "id": "17f67257-26e1-412b-bb57-4d5d649c221b",
       "name": "Reply to Website",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
@@ -377,7 +377,7 @@
       "waitBetweenTries": 1000
     },
     {
-      "id": "6a52ee59-f326-4d78-aaaf-5dee992dccd9",
+      "id": "daed1611-cc88-4eb7-97eb-88a75a44f7e8",
       "name": "When This Workflow Fails",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
@@ -388,7 +388,7 @@
       "parameters": {}
     },
     {
-      "id": "6c672cb9-0100-4bb0-b9f7-2634ea62b33a",
+      "id": "21c08737-91cc-40be-b8ba-b0c93967354e",
       "name": "Email Alert",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.2,
@@ -418,8 +418,8 @@
       "waitBetweenTries": 5000
     },
     {
-      "id": "0edd26e7-cbd9-4750-83d1-1adff9550890",
-      "name": "Sticky Note 0edd26e7",
+      "id": "1b30f9ec-cbb1-4988-9893-74ab28c7a8bf",
+      "name": "Sticky Note 1b30f9ec",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
