@@ -114,7 +114,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Read the website's request, pick the products that match the question (at most 30)\n// and turn them into text for the AI. The whole sheet is too big to send on every message.\nconst body = $('Webhook').first(0).json.body ?? {};\nconst txt = v => String(v ?? '').trim();\nconst num = v => (typeof v === 'number' ? v : txt(v) === '' ? NaN : Number(txt(v).replace(/[^0-9.-]/g, '')));\nconst session_id = txt(body.session_id) || 'guest';\nconst sku = txt(body.product_sku).toUpperCase();\n// opened from a sold-out product page with no message yet\nconst message = txt(body.message).slice(0, 1000) || (sku ? `สินค้า ${sku} หมด ช่วยแนะนำตัวอื่นให้หน่อย` : 'สวัสดี');\nconst m = message.toLowerCase();\n\n// rows with a missing sku, name or price are skipped\nconst products = $input.all().map(i => i.json)\n  .filter(p => txt(p.sku) && txt(p.name) && Number.isFinite(num(p.price_ex_vat)))\n  .map(p => ({ ...p, sku: txt(p.sku).toUpperCase(), category: txt(p.category).toLowerCase(), price: num(p.price_ex_vat), stock: num(p.stock_qty) || 0,\n               hay: ` ${txt(p.sku)} ${txt(p.name)} ${txt(p.tags)} ${txt(p.description)} `.toLowerCase() }))\n  .map(p => ({ ...p, hay2: p.hay.replace(/\\s+/g, '') }));  // \"16gb\" also finds \"16 GB\"\n\n// words that name a category, Thai and English\nconst CATEGORY_WORDS = {\n  gpu: ['การ์ดจอ', 'gpu', 'graphics card', 'rtx', 'gtx', 'radeon', 'geforce'],\n  cpu: ['ซีพียู', 'cpu', 'processor', 'ryzen', 'core i3', 'core i5', 'core i7', 'core i9', 'ultra 5', 'ultra 7'],\n  'cpu-cooler': ['ระบายความร้อน', 'ซิงค์', 'ชุดน้ำ', 'cooler', 'heatsink', 'aio'],\n  motherboard: ['เมนบอร์ด', 'เมนบอด', 'motherboard', 'mainboard'],\n  ram: ['แรม', 'ram', 'ddr4', 'ddr5'],\n  ssd: ['ssd', 'nvme', 'm.2'],\n  hdd: ['ฮาร์ดดิสก์', 'hdd', 'hard disk', 'harddisk'],\n  psu: ['พาวเวอร์', 'psu', 'power supply', 'วัตต์'],\n  case: ['เคส', 'case'],\n  monitor: ['จอ', 'นิ้ว', 'monitor', 'inch'],\n};\nconst esc = w => w.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\nconst has = (text, w) => /^[a-z0-9 .]+$/.test(w) ? new RegExp(`(^|[^a-z0-9])${esc(w)}([^a-z0-9]|$)`).test(text) : text.includes(w);\nconst STOP = new Set(['the', 'for', 'and', 'with', 'what', 'how', 'much', 'is', 'are', 'do', 'you', 'have', 'vat', 'price', 'total', 'buy', 'want', 'need', 'can', 'my', 'me', 'it', 'in', 'of', 'to', 'a', 'an', 'or', 'pc', 'gb', 'tb']);\n\nconst noGpu = m.replace(/การ์ดจอ/g, ' ');  // \"การ์ดจอ\" (graphics card) is not a monitor\nlet cats = Object.keys(CATEGORY_WORDS).filter(c => CATEGORY_WORDS[c].some(w => has(c === 'monitor' ? noGpu : m, w)));\nlet terms = (m.match(/[a-z0-9][a-z0-9.+-]*/g) ?? []).filter(t => t.length >= 2 && !STOP.has(t));\nconst asked = sku && products.find(p => p.sku === sku);\nif (asked) { cats = [...new Set([...cats, asked.category])]; terms = [...terms, sku.toLowerCase()]; }\n\n// a follow-up like \"for gaming\" names no product type: keep this chat's last search and add to it\nlet memo = { searches: {} };\ntry { memo = $getWorkflowStaticData('global'); memo.searches = memo.searches ?? {}; } catch (e) {}\nconst now = Date.now();\nfor (const [k, v] of Object.entries(memo.searches)) if (now - v.at > 24 * 3600e3) delete memo.searches[k];\nconst last = memo.searches[session_id];\nif (!cats.length && last) { cats = last.cats; terms = [...new Set([...last.terms, ...terms])].slice(-8); }\n// a word that only a few products have (a model like \"5600x\") counts more than a common one (\"ddr4\")\n// \"16gb\" or \"144hz\" may be written \"16 GB\" / \"144 Hz\" in the sheet; other words must match as they are\nconst found = (p, t) => p.hay.includes(t) || (/\\d/.test(t) && /[a-z]/.test(t) && p.hay2.includes(t));\nconst matches = p => terms.filter(t => found(p, t));\nconst df = Object.fromEntries(terms.map(t => [t, products.filter(p => found(p, t)).length]));\nconst score = p => matches(p).reduce((sum, t) => sum + 1 / df[t], 0);\nconst specific = p => matches(p).some(t => df[t] <= 20);\nconst scored = products.map(p => ({ p, s: score(p) }))\n  .filter(x => x.s > 0 && (!cats.length || cats.includes(x.p.category) || specific(x.p)))\n  .sort((a, b) => b.s - a.s || (b.p.stock > 0) - (a.p.stock > 0) || a.p.price - b.p.price);\n// best matches, taking turns between product types so \"CPU and RAM\" gets both\nconst groups = new Map();\nfor (const { p } of scored) { if (!groups.has(p.category)) groups.set(p.category, []); groups.get(p.category).push(p); }\nlet picks = [];\nwhile (picks.length < 16 && [...groups.values()].some(g => g.length)) {\n  for (const g of groups.values()) if (g.length && picks.length < 16) picks.push(g.shift());\n}\n// in-stock alternatives of the same types: closest in price to the best match, or spread over all prices\nconst types = cats.length ? cats : [...new Set(picks.map(p => p.category))];\nconst each = Math.max(3, Math.floor((30 - picks.length) / Math.max(1, types.length)));\nfor (const type of types) {\n  const anchor = picks.find(p => p.category === type)?.price;\n  let pool = products.filter(p => p.category === type && p.stock > 0 && !picks.includes(p));\n  if (anchor !== undefined) pool.sort((a, b) => Math.abs(a.price - anchor) - Math.abs(b.price - anchor));\n  else { pool.sort((a, b) => a.price - b.price); const step = pool.length / each; pool = Array.from({ length: Math.min(each, pool.length) }, (_, i) => pool[Math.floor(i * step)]); }\n  picks.push(...pool.slice(0, each));\n}\npicks = picks.slice(0, 30);\nif (!picks.length) {\n  // nothing named yet (\"hello\"): a few in-stock products from every category\n  const byCat = {};\n  for (const p of products.filter(p => p.stock > 0).sort((a, b) => a.price - b.price)) (byCat[p.category] ??= []).push(p);\n  picks = Object.values(byCat).flatMap(list => list.slice(0, 3)).slice(0, 30);\n}\nif (terms.length || cats.length) memo.searches[session_id] = { terms, cats, at: now };\n\nconst money = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\nconst lines = picks.map(p => [\n  p.sku, txt(p.name), p.category,\n  `฿${money(p.price)} before VAT, ฿${money(p.price * 1.07)} incl. VAT`,\n  p.stock > 0 ? `in stock: ${p.stock}` : 'SOLD OUT',\n  `tags: ${txt(p.tags)}`,\n  txt(p.description).slice(0, 250),\n].join(' | '));\nconst products_text = products.length\n  ? `(The store has ${products.length} products; these ${lines.length} match this question best. If what the customer wants isn't listed, ask for the exact model or type instead of saying the store doesn't have it.)\\n${lines.join('\\n')}`\n  : 'The product list is not available right now. Do not name any products.';\n\nreturn [{ json: { session_id, message, products_text } }];\n"
+        "jsCode": "// Read the website's request, pick the products that match the question (at most 30)\n// and turn them into text for the AI. The whole sheet is too big to send on every message.\nconst body = $('Webhook').first(0).json.body ?? {};\nconst txt = v => String(v ?? '').trim();\nconst num = v => (typeof v === 'number' ? v : txt(v) === '' ? NaN : Number(txt(v).replace(/[^0-9.-]/g, '')));\nconst session_id = txt(body.session_id) || 'guest';\nconst sku = txt(body.product_sku).toUpperCase();\n// opened from a sold-out product page with no message yet\nconst message = txt(body.message).slice(0, 1000) || (sku ? `สินค้า ${sku} หมด ช่วยแนะนำตัวอื่นให้หน่อย` : 'สวัสดี');\nconst m = message.toLowerCase();\n\n// rows with a missing sku, name or price are skipped\nconst products = $input.all().map(i => i.json)\n  .filter(p => txt(p.sku) && txt(p.name) && Number.isFinite(num(p.price_ex_vat)))\n  .map(p => ({ ...p, sku: txt(p.sku).toUpperCase(), category: txt(p.category).toLowerCase(), price: num(p.price_ex_vat), stock: num(p.stock_qty) || 0,\n               hay: ` ${txt(p.sku)} ${txt(p.name)} ${txt(p.tags)} ${txt(p.description)} `.toLowerCase() }))\n  .map(p => ({ ...p, hay2: p.hay.replace(/\\s+/g, '') }));  // \"16gb\" also finds \"16 GB\"\n\n// words that name a category, Thai and English\nconst CATEGORY_WORDS = {\n  gpu: ['การ์ดจอ', 'gpu', 'graphics card', 'rtx', 'gtx', 'radeon', 'geforce'],\n  cpu: ['ซีพียู', 'cpu', 'processor', 'ryzen', 'core i3', 'core i5', 'core i7', 'core i9', 'ultra 5', 'ultra 7'],\n  'cpu-cooler': ['ระบายความร้อน', 'ซิงค์', 'ชุดน้ำ', 'cooler', 'heatsink', 'aio'],\n  motherboard: ['เมนบอร์ด', 'เมนบอด', 'motherboard', 'mainboard'],\n  ram: ['แรม', 'ram', 'ddr4', 'ddr5'],\n  ssd: ['ssd', 'nvme', 'm.2'],\n  hdd: ['ฮาร์ดดิสก์', 'hdd', 'hard disk', 'harddisk'],\n  psu: ['พาวเวอร์', 'psu', 'power supply', 'วัตต์'],\n  case: ['เคส', 'case'],\n  monitor: ['จอ', 'นิ้ว', 'monitor', 'inch'],\n};\nconst esc = w => w.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\nconst has = (text, w) => /^[a-z0-9 .]+$/.test(w) ? new RegExp(`(^|[^a-z0-9])${esc(w)}([^a-z0-9]|$)`).test(text) : text.includes(w);\nconst STOP = new Set(['the', 'for', 'and', 'with', 'what', 'how', 'much', 'is', 'are', 'do', 'you', 'have', 'vat', 'price', 'total', 'buy', 'want', 'need', 'can', 'my', 'me', 'it', 'in', 'of', 'to', 'a', 'an', 'or', 'pc', 'gb', 'tb']);\n\nconst noGpu = m.replace(/การ์ดจอ/g, ' ');  // \"การ์ดจอ\" (graphics card) is not a monitor\nlet cats = Object.keys(CATEGORY_WORDS).filter(c => CATEGORY_WORDS[c].some(w => has(c === 'monitor' ? noGpu : m, w)));\nlet terms = (m.match(/[a-z0-9][a-z0-9.+-]*/g) ?? []).filter(t => t.length >= 2 && !STOP.has(t));\nconst asked = sku && products.find(p => p.sku === sku);\nif (asked) { cats = [...new Set([...cats, asked.category])]; terms = [...terms, sku.toLowerCase()]; }\n\n// a follow-up like \"for gaming\" names no product type: keep this chat's last search and add to it\nlet memo = { searches: {} };\ntry { memo = $getWorkflowStaticData('global'); memo.searches = memo.searches ?? {}; } catch (e) {}\nconst now = Date.now();\nfor (const [k, v] of Object.entries(memo.searches)) if (now - v.at > 24 * 3600e3) delete memo.searches[k];\nconst last = memo.searches[session_id];\nif (!cats.length && last) { cats = last.cats; terms = [...new Set([...last.terms, ...terms])].slice(-8); }\n// a word that only a few products have (a model like \"5600x\") counts more than a common one (\"ddr4\")\n// \"16gb\" or \"144hz\" may be written \"16 GB\" / \"144 Hz\" in the sheet; other words must match as they are\nconst found = (p, t) => p.hay.includes(t) || (/\\d/.test(t) && /[a-z]/.test(t) && p.hay2.includes(t));\nconst matches = p => terms.filter(t => found(p, t));\nconst df = Object.fromEntries(terms.map(t => [t, products.filter(p => found(p, t)).length]));\nconst score = p => matches(p).reduce((sum, t) => sum + 1 / df[t], 0);\nconst specific = p => matches(p).some(t => df[t] <= 20);\nconst scored = products.map(p => ({ p, s: score(p) }))\n  .filter(x => x.s > 0 && (!cats.length || cats.includes(x.p.category) || specific(x.p)))\n  .sort((a, b) => b.s - a.s || (b.p.stock > 0) - (a.p.stock > 0) || a.p.price - b.p.price);\n// best matches, taking turns between product types so \"CPU and RAM\" gets both\nconst groups = new Map();\nfor (const { p } of scored) { if (!groups.has(p.category)) groups.set(p.category, []); groups.get(p.category).push(p); }\nlet picks = [];\nwhile (picks.length < 16 && [...groups.values()].some(g => g.length)) {\n  for (const g of groups.values()) if (g.length && picks.length < 16) picks.push(g.shift());\n}\n// in-stock alternatives of the same types: closest in price to the best match, or spread over all prices\nconst types = cats.length ? cats : [...new Set(picks.map(p => p.category))];\nconst each = Math.max(3, Math.floor((30 - picks.length) / Math.max(1, types.length)));\nfor (const type of types) {\n  const anchor = picks.find(p => p.category === type)?.price;\n  let pool = products.filter(p => p.category === type && p.stock > 0 && !picks.includes(p));\n  if (anchor !== undefined) pool.sort((a, b) => Math.abs(a.price - anchor) - Math.abs(b.price - anchor));\n  else { pool.sort((a, b) => a.price - b.price); const step = pool.length / each; pool = Array.from({ length: Math.min(each, pool.length) }, (_, i) => pool[Math.floor(i * step)]); }\n  picks.push(...pool.slice(0, each));\n}\npicks = picks.slice(0, 30);\nif (!picks.length) {\n  // nothing named yet (\"hello\"): a few in-stock products from every category\n  const byCat = {};\n  for (const p of products.filter(p => p.stock > 0).sort((a, b) => a.price - b.price)) (byCat[p.category] ??= []).push(p);\n  picks = Object.values(byCat).flatMap(list => list.slice(0, 3)).slice(0, 30);\n}\nif (terms.length || cats.length) memo.searches[session_id] = { terms, cats, at: now };\n\nconst money = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\nconst lines = picks.map(p => [\n  p.sku, txt(p.name), p.category,\n  `฿${money(p.price)} before VAT, ฿${money(p.price * 1.07)} incl. VAT`,\n  p.stock > 0 ? `in stock: ${p.stock}` : 'SOLD OUT',\n  `tags: ${txt(p.tags)}`,\n  txt(p.description).slice(0, 250),\n].join(' | '));\nconst products_text = products.length\n  ? `(The store has ${products.length} products; these ${lines.length} match this question best. If what the customer wants isn't listed, ask for the exact model or type instead of saying the store doesn't have it.)\\n${lines.join('\\n')}`\n  : 'The product list is not available right now. Do not name any products.';\n\n// mode \"order\" (sent by a front-store app) always goes to the Order Desk\nreturn [{ json: { session_id, message, products_text, mode: txt(body.mode).toLowerCase() } }];\n"
       },
       "retryOnFail": true,
       "maxTries": 3,
@@ -134,7 +134,7 @@
         "text": "={{ $json.message }}",
         "needsFallback": true,
         "options": {
-          "systemMessage": "Classify the customer's message for a computer-hardware store. Answer with exactly one word:\nhardware = questions about products, recommendations, specs, stock, sold-out products, or the customer telling what they will use a product for\ncalculator = prices for quantities, totals, VAT, quotations\ntroubleshooter = problems, setup, drivers, warranty, returns, orders, delivery\nIf unsure, answer hardware.",
+          "systemMessage": "Classify the customer's message for a computer-hardware warehouse. Answer with exactly one word:\norder = a front store sends a PC spec or parts list to order, confirms, cancels or changes an order, or gives its store location\nhardware = questions about products, recommendations, specs, stock, sold-out products, or the customer telling what they will use a product for\ncalculator = prices for quantities, totals, VAT, quotations\ntroubleshooter = problems, setup, drivers, warranty, returns, delivery\nIf your previous answer was order and the customer is confirming, answering yes or no, or giving a location, answer order. If unsure, answer hardware.",
           "maxIterations": 3,
           "enableStreaming": false
         }
@@ -204,6 +204,28 @@
         "rules": {
           "values": [
             {
+              "outputKey": "order",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ ($('Prepare Request').first(0).json.mode === 'order' ? 'order ' : '') + ($json.output ?? '') }}",
+                    "rightValue": "order",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
               "outputKey": "calculator",
               "renameOutput": true,
               "conditions": {
@@ -214,7 +236,7 @@
                 },
                 "conditions": [
                   {
-                    "leftValue": "={{ $json.output }}",
+                    "leftValue": "={{ ($('Prepare Request').first(0).json.mode === 'order' ? 'order ' : '') + ($json.output ?? '') }}",
                     "rightValue": "calculator",
                     "operator": {
                       "type": "string",
@@ -236,7 +258,7 @@
                 },
                 "conditions": [
                   {
-                    "leftValue": "={{ $json.output }}",
+                    "leftValue": "={{ ($('Prepare Request').first(0).json.mode === 'order' ? 'order ' : '') + ($json.output ?? '') }}",
                     "rightValue": "troubleshoot",
                     "operator": {
                       "type": "string",
@@ -367,7 +389,7 @@
       ],
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ ok: true, agent: $prevNode.name, reply: $json.output || 'ขออภัยครับ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง / Sorry, something went wrong. Please try again.' }) }}",
+        "responseBody": "={{ JSON.stringify({ ok: true, agent: $json.agent || $prevNode.name, reply: $json.output || 'ขออภัยครับ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง / Sorry, something went wrong. Please try again.' }) }}",
         "options": {
           "responseCode": 200
         }
@@ -432,6 +454,297 @@
         "width": 384,
         "height": 224
       }
+    },
+    {
+      "name": "Router Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        740,
+        560
+      ],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Prepare Request').first(0).json.session_id }}:router",
+        "contextWindowLength": 4
+      }
+    },
+    {
+      "name": "Order Desk",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1500,
+        1000
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Prepare Request').first(0).json.message }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "=You are the Order Desk of the {{ $('Store Info').first(0).json.store_name }} warehouse. Front-store staff order PC parts from the warehouse. Reply in their language (Thai or English), short and clear.\n1. They send a PC spec or a parts list. Match every part to PRODUCTS and use its SKU. If no quantity is given, use 1.\n2. For each part, say if it is in stock with enough quantity. If it is SOLD OUT or there isn't enough, recommend the closest IN-STOCK alternative that fits the rest of the spec, and say why.\n3. Check the parts fit together (CPU socket = motherboard socket, RAM type = motherboard memory type, enough power supply watts for the graphics card).\n4. Show the order: one line per part \"SKU name x qty = price incl. VAT\", then the total incl. VAT (use the Calculator Tool). Ask them to confirm.\n5. When they confirm, ask for their front-store location (branch name or address) if you don't have it yet.\n6. Only when they have confirmed AND given the location, end your reply with this exact line, using the final SKUs and quantities:\nORDER_JSON: {\"location\": \"branch or address\", \"items\": [{\"sku\": \"SKU\", \"qty\": 1}]}\nNever write ORDER_JSON before they confirm, and never write it twice for the same order. If they change the order, show the new summary and ask again.\n\nPRODUCTS (sku | name | category | price | stock | tags | description):\n{{ $('Prepare Request').first(0).json.products_text }}",
+          "maxIterations": 8,
+          "enableStreaming": false
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Check Order",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        1000
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// The Order Desk writes ORDER_JSON only after the front store confirmed and gave its location.\n// Check that order against the sheet as it is right now; only then is stock taken off.\nconst out = String($json.output ?? '');\nconst found = out.match(/ORDER_JSON:\\s*(\\{[\\s\\S]*\\})\\s*$/);\nconst reply = out.replace(/ORDER_JSON:[\\s\\S]*$/, '').trim();\nconst answer = text => [{ json: { place: false, agent: 'Order Desk', output: text } }];\nif (!found) return answer(out);\n\nlet order;\ntry { order = JSON.parse(found[1]); } catch (e) {\n  return answer(`${reply}\\n\\nระบบอ่านรายการสั่งซื้อไม่ได้ กรุณายืนยันอีกครั้ง / Couldn't read the order, please confirm again.`);\n}\nconst txt = v => String(v ?? '').trim();\nconst num = v => (typeof v === 'number' ? v : txt(v) === '' ? NaN : Number(txt(v).replace(/[^0-9.-]/g, '')));\nconst sheet = new Map($('Get Products').all(0).map(i => i.json).filter(p => txt(p.sku)).map(p => [txt(p.sku).toUpperCase(), p]));\nconst location = txt(order.location);\nconst wanted = new Map();\nfor (const i of Array.isArray(order.items) ? order.items : []) {\n  const sku = txt(i.sku).toUpperCase();\n  wanted.set(sku, (wanted.get(sku) ?? 0) + Math.floor(num(i.qty)));\n}\n\nconst problems = [];\nif (!location) problems.push('no front-store location');\nif (!wanted.size) problems.push('no items');\nconst lines = [];\nfor (const [sku, qty] of wanted) {\n  const p = sheet.get(sku);\n  const stock = p ? num(p.stock_qty) || 0 : 0;\n  if (!p) problems.push(`${sku} is not in the sheet`);\n  else if (!(qty >= 1)) problems.push(`${sku}: quantity must be 1 or more`);\n  else if (qty > stock) problems.push(`${sku} (${txt(p.name)}) has only ${stock} in stock`);\n  else lines.push({ sku: txt(p.sku), name: txt(p.name), qty, price: num(p.price_ex_vat), new_stock: stock - qty });\n}\nif (problems.length) {\n  return answer(`${reply}\\n\\nยังสั่งซื้อไม่ได้ / Can't place the order yet: ${problems.join('; ')}. กรุณาแก้ไขแล้วยืนยันอีกครั้ง / Please fix it and confirm again.`);\n}\n\nconst subtotal = lines.reduce((sum, l) => sum + l.price * l.qty, 0);\nreturn [{ json: {\n  place: true, agent: 'Order Desk',\n  order_id: `ORD-${Date.now().toString(36).toUpperCase()}`,\n  location, lines,\n  total_incl_vat: Math.round(subtotal * 1.07 * 100) / 100,\n  session_id: $('Prepare Request').first(0).json.session_id,\n} }];\n"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Place Order?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1960,
+        1000
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.place }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "name": "Split Stock Updates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2180,
+        920
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// One item per product: its SKU and the stock left after this order.\nreturn $('Check Order').first(0).json.lines.map(l => ({ json: { sku: l.sku, stock_qty: l.new_stock } }));\n"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "name": "Update Stock",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2400,
+        920
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aiEpt4MCfgtCCgZ1",
+          "name": "Google Sheets account"
+        }
+      },
+      "parameters": {
+        "resource": "sheet",
+        "operation": "update",
+        "authentication": "oAuth2",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ String($('Get Products').params.documentId.value ?? '').match(/[-\\w]{25,}/)?.[0] ?? '' }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Inventory"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "sku": "={{ $json.sku }}",
+            "stock_qty": "={{ $json.stock_qty }}"
+          },
+          "matchingColumns": [
+            "sku"
+          ],
+          "schema": [
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "stock_qty",
+              "displayName": "stock_qty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "name": "Log Order",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2620,
+        920
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aiEpt4MCfgtCCgZ1",
+          "name": "Google Sheets account"
+        }
+      },
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "authentication": "oAuth2",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ String($('Get Products').params.documentId.value ?? '').match(/[-\\w]{25,}/)?.[0] ?? '' }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Orders"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "order_id": "={{ $('Check Order').first(0).json.order_id }}",
+            "date": "={{ $now.toFormat('yyyy-MM-dd HH:mm') }}",
+            "store_location": "={{ $('Check Order').first(0).json.location }}",
+            "items": "={{ $('Check Order').first(0).json.lines.map(l => l.sku + ' x' + l.qty).join(', ') }}",
+            "total_incl_vat": "={{ $('Check Order').first(0).json.total_incl_vat }}",
+            "session_id": "={{ $('Check Order').first(0).json.session_id }}"
+          },
+          "schema": [
+            {
+              "id": "order_id",
+              "displayName": "order_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "store_location",
+              "displayName": "store_location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "items",
+              "displayName": "items",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total_incl_vat",
+              "displayName": "total_incl_vat",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "name": "Order Confirmation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2840,
+        920
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Tell the front store the order is placed, and warn if a sheet update failed.\nconst o = $('Check Order').first(0).json;\nconst stockFailed = $('Update Stock').all(0).filter(i => i.json?.error).length;\nconst logFailed = $('Log Order').all(0).some(i => i.json?.error);\nconst money = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\nlet text = [\n  `✅ สั่งซื้อเรียบร้อย / Order placed: ${o.order_id}`,\n  `ส่งที่ / Deliver to: ${o.location}`,\n  ...o.lines.map(l => `• ${l.sku} ${l.name} x${l.qty}`),\n  `รวม / Total incl. VAT: ฿${money(o.total_incl_vat)}`,\n].join('\\n');\nif (stockFailed) text += `\\n⚠️ ตัดสต็อกไม่สำเร็จ ${stockFailed} รายการ กรุณาตรวจสอบในชีต / ${stockFailed} stock update(s) failed, please check the sheet.`;\nif (logFailed) text += '\\n⚠️ บันทึกลงแท็บ Orders ไม่สำเร็จ / Could not save the order in the Orders tab.';\nreturn [{ json: { agent: 'Order Desk', output: text } }];\n"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -512,6 +825,11 @@
             "node": "Hardware Expert",
             "type": "ai_languageModel",
             "index": 0
+          },
+          {
+            "node": "Order Desk",
+            "type": "ai_languageModel",
+            "index": 0
           }
         ]
       ]
@@ -538,12 +856,24 @@
             "node": "Hardware Expert",
             "type": "ai_languageModel",
             "index": 1
+          },
+          {
+            "node": "Order Desk",
+            "type": "ai_languageModel",
+            "index": 1
           }
         ]
       ]
     },
     "Route": {
       "main": [
+        [
+          {
+            "node": "Order Desk",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
           {
             "node": "Calculator",
@@ -595,6 +925,11 @@
             "node": "Hardware Expert",
             "type": "ai_memory",
             "index": 0
+          },
+          {
+            "node": "Order Desk",
+            "type": "ai_memory",
+            "index": 0
           }
         ]
       ]
@@ -604,6 +939,11 @@
         [
           {
             "node": "Calculator",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "Order Desk",
             "type": "ai_tool",
             "index": 0
           }
@@ -637,6 +977,101 @@
         [
           {
             "node": "Email Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Router",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order Desk": {
+      "main": [
+        [
+          {
+            "node": "Check Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Order": {
+      "main": [
+        [
+          {
+            "node": "Place Order?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Place Order?": {
+      "main": [
+        [
+          {
+            "node": "Split Stock Updates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply to Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Stock Updates": {
+      "main": [
+        [
+          {
+            "node": "Update Stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Stock": {
+      "main": [
+        [
+          {
+            "node": "Log Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Order": {
+      "main": [
+        [
+          {
+            "node": "Order Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order Confirmation": {
+      "main": [
+        [
+          {
+            "node": "Reply to Website",
             "type": "main",
             "index": 0
           }

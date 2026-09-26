@@ -29,6 +29,8 @@ Steps, in order:
    - **Hardware Expert**: recommends products for the customer's use (gaming, office, design) and checks that PC parts fit together (CPU socket, RAM type, power supply watts). **Sold-out rule:** if the product is sold out, it first asks *"What will you use it for?"*, then recommends 1–3 in-stock alternatives with one trade-off each.
    - **Calculator**: prices, totals and VAT 7% for quantities, using a **Calculator tool** so the math is exact.
    - **Troubleshooter**: numbered fix steps, warranty/returns from Store Info, hands over to staff when needed.
+   - **Order Desk** (front-store orders): a front store sends a PC spec. It matches every part to a SKU, checks stock and compatibility, recommends in-stock alternatives for sold-out parts, shows the total incl. VAT and asks to confirm. After the front store confirms, it asks for the store location. Then deterministic steps take over: **Check Order** (Code) re-checks every SKU and quantity against the live sheet, **Update Stock** (Google Sheets) lowers stock_qty, **Log Order** adds a row to the *Orders* tab, and **Order Confirmation** replies with the order number. The AI never changes stock itself.
+   The Router has its own small memory so follow-ups like "yes" or a branch name go back to the Order Desk; a front-store app can also send `"mode": "order"`.
 7. **Reply to Website** (Respond to Webhook): sends the answer back.
 8. Separate small branch: **Error Trigger → Email Alert (Gmail)**, which emails the owner if the workflow fails.
 

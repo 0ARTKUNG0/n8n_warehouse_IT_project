@@ -94,4 +94,5 @@ const products_text = products.length
   ? `(The store has ${products.length} products; these ${lines.length} match this question best. If what the customer wants isn't listed, ask for the exact model or type instead of saying the store doesn't have it.)\n${lines.join('\n')}`
   : 'The product list is not available right now. Do not name any products.';
 
-return [{ json: { session_id, message, products_text } }];
+// mode "order" (sent by a front-store app) always goes to the Order Desk
+return [{ json: { session_id, message, products_text, mode: txt(body.mode).toLowerCase() } }];

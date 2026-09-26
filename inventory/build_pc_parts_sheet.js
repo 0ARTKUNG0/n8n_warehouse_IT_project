@@ -61,6 +61,8 @@ for (const [file, [category, prefix, describe, extraTags]] of Object.entries(FIL
 
 const wb = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows, { header: ['sku', 'name', 'category', 'price_ex_vat', 'stock_qty', 'image_url', 'description', 'tags'] }), 'Inventory');
+// the Store Chat's Order Desk adds one row here per placed order
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['order_id', 'date', 'store_location', 'items', 'total_incl_vat', 'session_id']]), 'Orders');
 const out = path.join(__dirname, 'pc_parts_inventory.xlsx');
 XLSX.writeFile(wb, out);
 const count = c => rows.filter(r => r.category === c).length;
